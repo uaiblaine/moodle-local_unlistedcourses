@@ -1,0 +1,354 @@
+<?php
+// This file is part of Moodle - http://moodle.org/
+//
+// Moodle is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Moodle is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
+
+/**
+ * Unlisted courses - Whether the current user may discover a course
+ *
+ * @package    local_unlistedcourses
+ * @copyright  2026 Anderson Blaine
+ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ */
+
+namespace local_unlistedcourses;
+
+use local_unlistedcourses\local\fields;
+
+/**
+ * Decides whether the current user may discover a course.
+ *
+ * A course marked unlisted is discoverable only by someone who is actively
+ * enrolled, has an application pending, or could enrol right now. Everyone
+ * else must not learn that it exists - so the answer feeds course listings,
+ * the enrolment page and anything else that would otherwise print its name.
+ *
+ * CURRENT USER ONLY, and not by choice. The two predicates this class
+ * delegates to both read the $USER global rather than accepting a user id:
+ * enrol_self_plugin::can_self_enrol() resolves cohort membership through
+ * $USER->id, and the fleet's enrol_apply fork does the same in allow_apply().
+ * Passing a user id would mean reimplementing both, and a reimplementation
+ * that drifts from the plugin it mirrors fails open. Tests switch users with
+ * setUser() instead.
+ *
+ * NOTHING HERE IS CACHED BEYOND THE REQUEST, deliberately. The answer depends
+ * on cohort membership, and the fleet's tool_dynamic_cohorts writes
+ * cohort_members in bulk WITHOUT firing cohort_member_added/removed - by its
+ * own comment, "the bulk path deliberately skips" them. A cache invalidated
+ * by those events would keep showing a course to someone who has just been
+ * removed from the cohort that gated it, which is the failure this plugin
+ * exists to prevent. The answer also depends on time(), through the
+ * enrolment window each enrol plugin enforces.
+ *
+ * @package    local_unlistedcourses
+ * @copyright  2026 Anderson Blaine
+ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ */
+class access {
+    /** @var array Request cache of the discoverability answer, keyed courseid => bool. */
+    private static array $discoverable = [];
+
+    /** @var array Request cache of the unlisted flag, keyed courseid => bool. */
+    private static array $unlisted = [];
+
+    /**
+     * Forget everything cached for this request.
+     *
+     * Called by tests, and by anything that changes a course's unlisted flag
+     * or the current user's enrolments inside one request.
+     *
+     * @return void
+     */
+    public static function reset_caches(): void {
+        self::$discoverable = [];
+        self::$unlisted = [];
+    }
+
+    /**
+     * Whether the current user may discover this course.
+     *
+     * @param int $courseid The course id.
+     * @return bool True when the course may be named to this user.
+     */
+    public static function is_course_discoverable(int $courseid): bool {
+        $answers = self::are_courses_discoverable([$courseid]);
+        return $answers[$courseid] ?? true;
+    }
+
+    /**
+     * Whether the current user may discover each of these courses.
+     *
+     * Resolves the unlisted flag for every id in ONE query and then evaluates
+     * eligibility only for the courses that are actually marked - which on a
+     * real site is a small minority of any listing, and is what keeps this
+     * affordable. The expensive half (one enrol_get_instances() plus one
+     * cohort_is_member() per instance, neither of which core caches anywhere)
+     * therefore runs over the marked subset, never over the whole page.
+     *
+     * @param array $courseids Course ids.
+     * @return array Map of courseid => bool, in the order given.
+     */
+    public static function are_courses_discoverable(array $courseids): array {
+        $courseids = array_values(array_unique(array_map('intval', $courseids)));
+        $answers = [];
+
+        $unknown = [];
+        foreach ($courseids as $courseid) {
+            if (isset(self::$discoverable[$courseid])) {
+                $answers[$courseid] = self::$discoverable[$courseid];
+            } else {
+                $unknown[] = $courseid;
+            }
+        }
+        if (!$unknown) {
+            return $answers;
+        }
+
+        $unlisted = self::unlisted_flags($unknown);
+        foreach ($unknown as $courseid) {
+            $answer = empty($unlisted[$courseid]) ? true : self::eligible($courseid);
+            self::$discoverable[$courseid] = $answer;
+            $answers[$courseid] = $answer;
+        }
+
+        return $answers;
+    }
+
+    /**
+     * Keep only the courses the current user may discover.
+     *
+     * Accepts anything with an ->id, which covers both the stdClass records
+     * and the core_course_list_element objects the course renderer passes
+     * around, and preserves the incoming keys so a caller can keep paginating
+     * with them.
+     *
+     * @param array $courses Course records or list elements, any keys.
+     * @return array The same array minus the courses this user must not discover.
+     */
+    public static function filter_courses(array $courses): array {
+        if (!$courses) {
+            return $courses;
+        }
+
+        $ids = [];
+        foreach ($courses as $course) {
+            $ids[] = (int) $course->id;
+        }
+        $answers = self::are_courses_discoverable($ids);
+
+        $kept = [];
+        foreach ($courses as $key => $course) {
+            if ($answers[(int) $course->id] ?? true) {
+                $kept[$key] = $course;
+            }
+        }
+        return $kept;
+    }
+
+    /**
+     * Which of these courses carry the unlisted flag.
+     *
+     * One query over customfield_data, scoped by the resolved field id rather
+     * than by shortname: a same-named field belonging to another component
+     * must not be read as this plugin's flag.
+     *
+     * @param array $courseids Course ids.
+     * @return array Map of courseid => bool for every id given.
+     */
+    private static function unlisted_flags(array $courseids): array {
+        global $DB;
+
+        $flags = [];
+        $lookup = [];
+        foreach ($courseids as $courseid) {
+            if (isset(self::$unlisted[$courseid])) {
+                $flags[$courseid] = self::$unlisted[$courseid];
+            } else {
+                $flags[$courseid] = false;
+                $lookup[] = $courseid;
+            }
+        }
+        if (!$lookup) {
+            return $flags;
+        }
+
+        $field = fields::get_field(fields::SHORTNAME_UNLISTED);
+        if (!$field) {
+            // Not provisioned yet: nothing is unlisted, so nothing is hidden.
+            foreach ($lookup as $courseid) {
+                self::$unlisted[$courseid] = false;
+            }
+            return $flags;
+        }
+
+        [$insql, $params] = $DB->get_in_or_equal($lookup, SQL_PARAMS_NAMED, 'cid');
+        $params['fieldid'] = $field->get('id');
+        $sql = "SELECT d.instanceid
+                  FROM {customfield_data} d
+                 WHERE d.fieldid = :fieldid
+                   AND d.instanceid $insql
+                   AND d.intvalue = 1";
+        $marked = $DB->get_fieldset_sql($sql, $params);
+        $marked = array_map('intval', $marked);
+
+        foreach ($lookup as $courseid) {
+            $value = in_array($courseid, $marked, true);
+            self::$unlisted[$courseid] = $value;
+            $flags[$courseid] = $value;
+        }
+        return $flags;
+    }
+
+    /**
+     * Whether the current user is enrolled in, has applied to, or could join this course.
+     *
+     * @param int $courseid The course id.
+     * @return bool True when the course may be named to this user.
+     */
+    private static function eligible(int $courseid): bool {
+        global $USER;
+
+        if ($courseid == SITEID) {
+            // Everybody participates on the frontpage.
+            return true;
+        }
+
+        /* Fail closed for visitors and guests before consulting any enrol plugin:
+           can_self_enrol($instance, false) skips its own guest check, so a guest
+           would otherwise pass on any instance that carries no cohort restriction. */
+        if (!isloggedin() || isguestuser()) {
+            return false;
+        }
+
+        $context = \core\context\course::instance($courseid, IGNORE_MISSING);
+        if (!$context) {
+            return false;
+        }
+
+        if (is_enrolled($context, $USER, '', true)) {
+            return true;
+        }
+
+        /* Staff keep normal visibility. Without this, an unlisted course
+           disappears from the category listing of the very people who
+           administer it: a manager is not enrolled, is not in the gating
+           cohort, and can_self_enrol() answers no for them like anybody else -
+           so the course they are responsible for stops existing on screen, and
+           the site admin loses it too.
+
+           The two capabilities are core's own idioms for "may see this course
+           without being enrolled": moodle/course:view is what is_viewing()
+           tests and what managers hold, and moodle/course:viewhiddencourses is
+           the one core itself consults to decide who still sees a course that
+           has been hidden - held by teacher, editingteacher, coursecreator and
+           manager. Site admins pass both. */
+        if (is_viewing($context) || has_capability('moodle/course:viewhiddencourses', $context)) {
+            return true;
+        }
+
+        return self::has_pending_enrolment($courseid) || self::can_enrol($courseid);
+    }
+
+    /**
+     * Whether the current user holds an inactive enrolment row in this course.
+     *
+     * An enrol_apply application in the waiting state is a user_enrolments row
+     * with a status other than ENROL_USER_ACTIVE, so is_enrolled() with
+     * $onlyactive reports false for an applicant who is waiting for a decision.
+     * Without this term, applying to an unlisted course would make it vanish
+     * from the listing the moment the application was filed.
+     *
+     * @param int $courseid The course id.
+     * @return bool True when an inactive enrolment row exists for this user.
+     */
+    private static function has_pending_enrolment(int $courseid): bool {
+        global $DB, $USER;
+
+        /* status <> ENROL_USER_ACTIVE, not "any row": an ACTIVE row is already
+           is_enrolled()'s answer, and matching it here would make this term
+           subsume that one - which is exactly how the first draft of this
+           method passed its tests while the enrolment short circuit it was
+           meant to complement went unheld by any of them. */
+        $sql = "SELECT 1
+                  FROM {user_enrolments} ue
+                  JOIN {enrol} e ON e.id = ue.enrolid
+                 WHERE ue.userid = :userid
+                   AND e.courseid = :courseid
+                   AND ue.status <> :active";
+        return $DB->record_exists_sql($sql, [
+            'userid' => $USER->id,
+            'courseid' => $courseid,
+            'active' => ENROL_USER_ACTIVE,
+        ]);
+    }
+
+    /**
+     * Whether any enabled enrolment instance would accept the current user right now.
+     *
+     * Dispatches per plugin rather than calling one shared method, because
+     * there is no shared method to call: enrol_plugin::can_self_enrol() is
+     * `return false` in the base class and only enrol_self overrides it in
+     * the whole of core, so asking every plugin through it would report "no"
+     * for enrol_apply and hide the course from the very people it is open to.
+     *
+     * The enrol_apply branch mirrors theme_boost_union_fundaseg's own resolver:
+     * allow_apply() is guarded with is_callable() because the fork may not be
+     * installed, and the applicant cap lives OUTSIDE allow_apply() so it is
+     * checked separately.
+     *
+     * Note that both predicates also enforce the enrolment window and the
+     * places limit, so an unlisted course disappears from the listing while
+     * its enrolment window is shut or once it is full. That is deliberate -
+     * it is the same answer core's own enrolment icons give - but it does
+     * make the listing time-dependent.
+     *
+     * @param int $courseid The course id.
+     * @return bool True when at least one instance would accept this user.
+     */
+    private static function can_enrol(int $courseid): bool {
+        global $CFG, $DB;
+
+        require_once($CFG->dirroot . '/enrol/self/lib.php');
+
+        foreach (enrol_get_instances($courseid, true) as $instance) {
+            $plugin = enrol_get_plugin($instance->enrol);
+            if (!$plugin) {
+                continue;
+            }
+
+            if ($instance->enrol === 'self') {
+                /* Strictly === true: can_self_enrol() returns true, an error string, or
+                   null - the last when customint5 points at a deleted cohort, which
+                   cohort_delete_cohort() never clears. Only === true fails closed. */
+                if ($plugin->can_self_enrol($instance, false) === true) {
+                    return true;
+                }
+                continue;
+            }
+
+            if ($instance->enrol === 'apply' && is_callable([$plugin, 'allow_apply'])) {
+                if ($plugin->allow_apply($instance) !== true) {
+                    continue;
+                }
+                $cap = (int) $instance->customint3;
+                if ($cap > 0 && $DB->count_records('user_enrolments', ['enrolid' => $instance->id]) >= $cap) {
+                    continue;
+                }
+                return true;
+            }
+        }
+
+        return false;
+    }
+}
