@@ -362,3 +362,146 @@ every step, Behat included. **All four legs GitHub runs are green locally.**
 A second 5.2 stack, `m502b` on `localhost:9502`, now exists for parallel test runs: the same
 suite took 59 s there while the same run on m502 took 577 s, 518 s of it queued behind
 another session's mutation sweep.
+
+---
+
+## 12. Stage 2 status (2026-09-03)
+
+Stage 1 was merged into `main` through PR #2 after its GitHub run went green. Stage 2 is
+commit 883829a on the theme's `public-hotsite` branch, pull request #3:
+
+- `hotsite.php`: the visitor gate runs first and answers every non-public or nonexistent
+  course with the login page; `can_view_course_info()` is skipped for visitors; a public
+  course registers its head tags before `$OUTPUT->header()`.
+- `classes/local/hotsite/publicaccess.php` (fail-closed adapter, pinned by a test that hands
+  it a class that does not exist) beside `redirector::is_ghosted()`, which gained the same
+  seam to pin its fail-open answer; both docblocks explain the asymmetry.
+- `classes/output/opengraph.php` + `templates/opengraph.mustache` + the
+  `before_standard_head_html_generation` callback. The robots directive and the canonical
+  link are literal strings in the callback: the template lint validates a fragment as body
+  content and rejects a `meta` with a `name` and a canonical `link` there, while the RDFa
+  `og:` metas pass. Values travel plain and are escaped once.
+- `descricao_publica` (text, 200, NOTVISIBLE) as the only source of `og:description`;
+  `hotsite_publico` deleted by the upgrade; `noclean` off on public courses; the forced-login
+  hiding removed from the course-form hook.
+- Behat: a theme step (`the course "X" is "public" for discoverability`) writing through
+  `set_state()` as admin; the public scenarios keep `forcelogin = 1`.
+
+Measured on m502 after `mdl upgrade` and publishing course 85 with a description carrying
+an ampersand: **200**, 51 295 bytes, `</head>` at 10 508, every tag present, `&amp;` once,
+no double escape; courses 2, 86, 89 and a nonexistent id all **303 to login**.
+
+The adversarial review of stage 2 (13 agents) confirmed one blocking defect, fixed before the
+commit: the three textarea sections reached the public page through `export_value()`, which
+honours the value's trust mark, so with `enabletrusttext` on an editor holding
+`moodle/site:trustcontent` shipped uncleaned HTML - the summary had been fixed and the
+sections, 190 lines away on the same page, had not. Lesson recorded in the theme's
+`CLAUDE.md`: fix this class of defect by the sink, every triple stash on the public page,
+not by the field. The review also measured what stage 3 must own: under `forcelogin`,
+`file_pluginfile()` runs `require_login()` for `course/overviewfiles` and `course/summary`
+(`lib/filelib.php` ~4964), so the hero image and images embedded in the summary answer a
+visitor with 303 while textarea images serve. The theme's own file route, re-checking
+`is_public()`, has to carry all three: `og:image`, the hero, and summary files.
+
+Stage 3 (the image) is not started: `og:image` is absent until it is.
+
+## 13. Stage 3 status (2026-09-03)
+
+Stage 2 was merged through the theme's PR #3. Stage 3 is on the theme's `public-image`
+branch: the file route of section 6, extended to carry the two things the stage 2 review
+measured as missing besides `og:image` - the course image itself and the images embedded in
+the summary, which core answered with 303 for a visitor.
+
+- `classes/local/hotsite/publicfiles.php` holds the route; `lib.php` gains the
+  `theme_boost_union_fundaseg_pluginfile()` shim, which does nothing but call
+  `publicfiles::serve()`. Three areas, the course id as the item id in each:
+  `hero/<courseid>/<contenthash>/<filename>` (the first overview image, bytes as stored),
+  `ogimage/<courseid>/<contenthash>/og.jpg` (a 1200x630 JPEG derivative made once per
+  content under `localcachedir`, cover-scaled and centre-cropped, quality 82, turned upright
+  first through core's `stored_file::rotate_image()` when the photo carries an EXIF
+  orientation) and `summary/<courseid>/<filepath><filename>` (an image of the
+  `course/summary` area - images only, so that an editor-left `.html` in that area cannot
+  become same-origin script for every visitor).
+- `resolve()` is where every check lives, and it is the unit-tested half: the context must
+  be a course's; the course id in the path must be that context's own instance - the summary
+  area looks its file up by the context, so that is the sink a mismatch would reach; the
+  course must be public at the moment of the request AND carry a hotsite model, the two
+  conditions under which `hotsite.php` serves a visitor, so the route is reachable exactly
+  when the page is (this keeps section 9's "armed but inert" true: a public course without a
+  model exposes nothing); a hashed area must name the current content hash and its own file
+  name (`og.jpg` for the derivative, the file's name for the hero) in exactly three segments;
+  a summary path must reach a file that GD accepts as an image. `serve()` sends and dies and
+  is verified with real requests below; the og area sends the derivative or 404, never the
+  original under a name that promised a 1200x630 JPEG. A refusal is `send_header_404(); die`.
+- `opengraph::for_course()` asks `publicfiles::ogimage()` for the image: the derivative with
+  `og:image:type`, `og:image:width`/`height` 1200x630 and `og:image:alt` (the title) when it
+  can be made; the original through the hero route, typed but unsized, when it cannot AND it
+  is a raster of at most 600 KB - the ceiling the derivative exists to enforce; no image tag
+  otherwise. The derivative is made at page render, once, so the tags only claim a size the
+  route will serve. The cache file is named by the content hash plus the canvas and quality
+  it was made with, so a changed constant is a new file and nothing needs invalidating.
+- Two ceilings, both measured on the stack rather than assumed. Sources above 25 million
+  pixels get no derivative: under `MEMORY_EXTRA` (384 MB on 64-bit), decoding a 25-megapixel
+  PNG, rotating it and covering the canvas peaks 200 MB over the request's baseline (a
+  30-megapixel PNG without rotation, 203 MB), which leaves room for the raw bytes and the page
+  while still admitting a 24-megapixel camera photo. Quality 82 holds a 1200x630 of pure
+  noise - the worst case for JPEG - at 519 KB (665 KB at 90, 871 KB at 95), so the ~600 KB
+  WhatsApp accepts holds for every source.
+- On a public course `hotsite_page` mints the hero URL and rewrites the summary's
+  `@@PLUGINFILE@@` links through the route, whoever is looking - a public page is the same
+  page for everybody; the non-public page keeps core's URLs and is the control in the tests.
+- No version bump (no schema, services or AMD change), no new strings.
+
+Measured on m502 after seeding course 85 with a 2400x1350 JPEG course image and a 600x400
+PNG in the summary, as `facebookexternalhit/1.1` with no session - section 8's loop, run
+verbatim over every `pluginfile.php`/`flavours/` URL the page emits (the page emits three;
+its category carries no flavour):
+
+| request | answer |
+|---|---|
+| `hotsite.php?id=85` | **200**, 50 173 bytes, `</head>` at 10 905; `og:image`, `og:image:type` image/jpeg, `og:image:alt`, `og:image:width` 1200, `og:image:height` 630 present |
+| `…/theme_boost_union_fundaseg/hero/85/<hash>/capa.jpg` | **200** image/jpeg 74 703 B, `Cache-Control: private, max-age=604800` |
+| `…/theme_boost_union_fundaseg/ogimage/85/<hash>/og.jpg` | **200** image/jpeg 20 830 B, 1200x630 baseline q82; cached as `<hash>-1200x630-q82.jpg` |
+| `…/theme_boost_union_fundaseg/summary/85/foto.png` | **200** image/png 2 699 B, `private, max-age=3600` |
+| hero and summary under course 86's id, a zeroed hash, a foreign file name, a fourth segment, `capa.jpg` under the og area, a missing summary file, an unknown area, the system context | **404**, 0 bytes each |
+| core's `course/overviewfiles/capa.jpg` and `course/summary/foto.png` | **303** to login, unchanged |
+| `hotsite.php` for courses 2, 86, 89 and a nonexistent id | **303** to login, unchanged |
+
+Tests: 13 in `publicfiles_test` (hero pick and parity with core's course image, URLs, public-now,
+model required, cross-course id through the summary sink and a category inserted under the
+course's own id so that only the context level refuses it, stale hash, foreign name, fourth
+segment, unknown area, summary path and directory entry, images only, derivative size and
+reuse, noise under 600 KB, EXIF upright, ceiling and fallback), two in `opengraph_test` (the
+tags with and without an image; the unsized fallback set rendered) and one in
+`hotsite_page_test` (the public page routes the hero and the summary through the theme, the
+internal page does not), plus a Behat scenario with a theme step that stores a GD-made course
+image and asserts the `og:image` tags and the hero style; 13 scenarios, 99 steps green.
+Eighteen mutation gates added (`files_public_recheck`, `files_course_match`,
+`files_context_level`, `files_hash_match`, `files_model_required`,
+`files_arg_count`, `files_name_match`, `files_summary_type`, `derivative_canvas`,
+`derivative_ceiling`, `derivative_rotation`, `derivative_quality`, `og_image_omitted`,
+`og_image_size_claimed`, `og_fallback_size`, `hero_route_public`, `summary_route_public`,
+`pluginfile_wired`), every one reddening a named test. A nineteenth, on the summary area's
+`is_directory()` check, reddened NOTHING on the first sweep: once the area was limited to
+images, a directory entry - which has no mimetype - was refused by `is_valid_image()` as
+well, so the guard was dead and was removed rather than kept for show. `cacheability =>
+private` and the bare 404 are curl facts, not gates, because `serve()` cannot run under
+PHPUnit.
+
+The adversarial review (16 agents: seven lenses, a skeptic per blocking or required finding,
+a completeness critic) confirmed no hole in the authorisation surface and produced the
+changes above that were not in the first draft: the summary area limited to images, the
+hotsite model required by the route, the EXIF rotation, the 600 KB gate on the fallback, the
+og area answering 404 rather than the original, the cache name carrying canvas and quality,
+the cross-course test through the summary sink, the unsized tag set rendered by a test, and
+the memory ceiling measured rather than estimated. Declined, with reasons: making the
+derivative out of band (an adhoc task) - the ceiling is measured and the work happens once
+per content; a rate limit on derivative builds - a build needs a public course's current
+hash and happens once per purge; `og:image:secure_url` - meaningful only behind HTTPS and
+redundant with an https `og:image`; serving a modeless public course's files to an entitled
+logged-in user through the theme route - the internal page mints core's URLs for them.
+
+Two traps met while writing the tests, recorded in the theme's `CLAUDE.md`:
+`$DB->insert_record()` silently drops a given `id` (only `insert_record_raw()` with
+`$customsequence = true` writes a row under a chosen id), and two GD images of the same size
+and colour are the same bytes, so two fixtures meant to differ shared one content hash.
