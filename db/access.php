@@ -15,7 +15,7 @@
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Unlisted courses - Version file
+ * Course discoverability - Capabilities
  *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine
@@ -24,9 +24,23 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->component = 'local_unlistedcourses';
-$plugin->version = 2026090200;
-$plugin->release = 'v5.2-r2';
-$plugin->requires = 2026042000;
-$plugin->supported = [502, 502];
-$plugin->maturity = MATURITY_ALPHA;
+$capabilities = [
+
+    /*
+     * Make a course readable by visitors who are not logged in, on a site
+     * that forces login. Manager only, and deliberately WITHOUT
+     * clonepermissionsfrom: hiding your own course is an editing act,
+     * publishing it to the internet is not, and no upgrade may back-fill
+     * this from moodle/course:update. RISK_SPAM because the published page
+     * carries author-written text to the open web; RISK_PERSONAL because a
+     * course page can name its participants and contacts.
+     */
+    'local/unlistedcourses:publish' => [
+        'riskbitmask' => RISK_SPAM | RISK_PERSONAL,
+        'captype' => 'write',
+        'contextlevel' => CONTEXT_COURSE,
+        'archetypes' => [
+            'manager' => CAP_ALLOW,
+        ],
+    ],
+];

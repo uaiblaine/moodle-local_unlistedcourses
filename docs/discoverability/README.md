@@ -1,0 +1,364 @@
+# Course discoverability + Open Graph — implementation brief
+
+Design record and implementation brief for making a **chosen** course readable by the
+anonymous internet, so that a link pasted into WhatsApp, Facebook, LinkedIn or Telegram
+shows a rich preview — on a site that keeps `$CFG->forcelogin = 1`.
+
+Written 2026-09-02 from a measured feasibility study. `docs/` is `export-ignore`'d, so this
+never ships in a release zip.
+
+Full assessment, with the rejected alternatives and the reasoning:
+https://claude.ai/code/artifact/38a5c4e7-d6f6-4643-bc5c-66790e761fb3
+
+---
+
+## 1. What is being built, and where
+
+Two existing repos. **No new plugin.**
+
+| Repo | Gains |
+|---|---|
+| `local_unlistedcourses` | The discoverability state (its first table), the predicate, the publish capability, the course-form control, backup/restore |
+| `theme_boost_union_fundaseg` | The public surface (`hotsite.php` serves anonymous visitors), the `og:` tags, the image route |
+
+The split follows the fleet rule that a theme owns presentation, never data schema. The
+state is an access-control input, so it belongs in the `local_` plugin; the page and the
+image route are presentation, so they stay in the theme.
+
+The component name `local_unlistedcourses` becomes narrower than its scope (it will own
+"public" as well as "unlisted"). Renaming a Moodle component means uninstall + reinstall and
+losing the data, so **keep the name**, rewrite the user-facing strings to talk about
+discoverability, and record the mismatch in `CLAUDE.md`.
+
+## 2. Environment posture
+
+- Moodle **5.2 only** on both repos (`$plugin->supported = [502, 502]`), developed on `m502`.
+- `forcelogin = 1` and **stays 1**. Nothing in this work writes it at runtime.
+- `opentowebcrawlers = 0` and stays 0.
+- The environment is **new**: courses are configured by hand, one at a time. This removes the
+  whole backfill/migration problem the original design had to carry. Retire the old fields
+  outright in the same release rather than staging it.
+- The theme already declares the dependency: `version.php` has
+  `'local_unlistedcourses' => 2026082900`, and `ci.yml` pins
+  `uaiblaine/moodle-local_unlistedcourses,main` in `plugin-dependencies`. Bump the version
+  constraint when the new API lands, and **push the local plugin first** — the theme's CI
+  clones the dependency from GitHub `main`, not from the local working tree.
+
+## 3. Verified facts — do not re-derive these
+
+Every line below was read in `~/dev/moodle-502` or measured on the running `m502` stack on
+2026-09-02. They are the reason the design looks the way it does.
+
+**Why an anonymous page is possible at all.** `$CFG->forcelogin` is not an ambient gate — it
+is roughly twenty explicit reads, and there is **no allowlist, exemption constant or per-page
+opt-out anywhere in core**. `login/index.php` is anonymous for one reason only: it never
+calls `require_login()`. A page that also declines to call it is anonymous with `forcelogin`
+left at 1.
+
+**The two guards that block the hotsite today**, both measured by removing them and scraping
+as `facebookexternalhit`:
+
+| Guard | Symptom while present |
+|---|---|
+| `hotsite.php:61` — the `!empty($CFG->forcelogin) \|\|` term | 303 to login |
+| `hotsite.php:77` — `core_course_category::can_view_course_info()` | **500**, `error/coursehidden` |
+
+The second one is not obvious: it ends in `has_capability('moodle/category:viewcourselist')`,
+and `accesslib.php:475-477` hard-denies **every** capability for `userid == 0` while
+`forcelogin` is on. With both fixed the page returns **200, 48 208 bytes**, the course name
+renders, `</head>` lands at byte 9 961 (inside Slack's 32 KB unfurl window), and
+`theme/styles.php` plus the favicon serve 200 anonymously. Blocks, navigation and
+`enrol_page_hook()` did **not** throw for an anonymous user — that was the main risk and it
+did not materialise.
+
+**`before_http_headers` is useless for this.** It is dispatched from
+`core_renderer::header()`, so a request ending in `redirect()` never reaches it. This is why
+the third-party `local_open_graph` plugin cannot help and must not be installed (it has four
+further defects: an application-mode cache with no invalidation events, a course branch that
+misses the hotsite's category context, double escaping, and zero visibility checking).
+
+**File serving.** `file_pluginfile()` dispatches on `$filefunction = $component . '_pluginfile'`
+(`lib/filelib.php:5397`) — the function name comes from the **file's component**, not the
+active theme, and the generic third-party branch applies **no** login check and reads
+`forcelogin` zero times. That is what makes an anonymous image route possible. It is also why
+a grandchild theme cannot close Boost Union's `courseheaderimage` hole: files stored under
+`theme_boost_union` always reach `theme_boost_union_pluginfile()`.
+
+**Course custom fields are the wrong store for this.** `customfield_select` stores the
+**position** of the option, not its text (`field_controller.php:55-67` returns
+`array_merge([''], …)` over a free-text textarea; `data_controller.php:42-43` datafield is
+`intvalue`). Reordering options at `/course/customfield.php` silently reassigns every stored
+row, and the accident points toward publishing. Separately, `course_handler::can_view()`
+returns `false` unconditionally for a NOTVISIBLE field and `get_instance_data()` defaults to
+`$returnall = false`, which is why both existing consumers already read past the handler.
+
+**The course form hook pair.** `\core_course\hook\after_form_definition` adds the control;
+`\core_course\hook\after_form_submission` persists it. The latter is dispatched at
+`course/lib.php:2022` in `update_course()` **before** `$DB->update_record('course', $data)` at
+`:2026`, and at `:1903` in `create_course()` — so it fires for the web service and
+`tool_uploadcourse` too, not just the form. Put the write there, not in the form.
+
+**Backup/restore for a local plugin is available at course level.** `backup_local_plugin` and
+`restore_local_plugin` exist, and course structures add them:
+`backup_stepslib.php:586` and `restore_stepslib.php:2000`.
+
+**A capability with no lang string is fatal on 5.x**, not cosmetic — it kills the roles
+permissions page mid-table. Ship `en` and `pt_br` in the same commit.
+
+## 4. Stage 1 — the state (`local_unlistedcourses`)
+
+This plugin has **no `db/install.xml`, no `db/upgrade.php` and no `db/access.php` today**.
+All three are new.
+
+1. **Table** `local_unlistedcourses_state`: `id`, `courseid` (unique index), `state` (int),
+   `usermodified`, `timemodified`. **Only non-default courses get a row** — absence means
+   default. Declare `SEQUENCE` explicitly on every field and validate with `xmllint` against
+   `public/lib/xmldb/xmldb.xsd`.
+2. **Class** `\local_unlistedcourses\discoverability` with explicit constants
+   (`STATE_DEFAULT`, `STATE_UNLISTED`, `STATE_PUBLIC`) and:
+   - `get_states(array $courseids): array` — one query, request-cached, the shape
+     `access::are_courses_discoverable()` already uses.
+   - `get_state(int)`, `is_public(int)`, `is_unlisted(int)`.
+   - `set_state(int $courseid, int $state): void` — **the capability check lives in here**,
+     not in the form, so the web service, CSV and restore paths cannot route around it.
+   - `is_public()` must ALSO require `$course->visible` and every category on the course's
+     path being visible. It is the gate for an anonymous page; it cannot delegate that.
+   - Keep the existing "never cache across requests" rule and its docblock reasoning.
+3. **Capability** `local/unlistedcourses:publish` — course context, captype write, risk
+   `SPAM | PERSONAL`, **manager only, and no `clonepermissionsfrom`** so no upgrade
+   back-fills it from `moodle/course:update`. Hiding your own course is an editing act;
+   publishing it to the internet is not, and the two must not travel together.
+4. **Rewire `access.php`** — replace `unlisted_flags()`'s raw SQL with
+   `discoverability::get_states()`. Everything else in `eligible()` stays exactly as it is,
+   including the staff escape, the `=== true`, and the pending-enrolment term.
+5. **Form control** via `db/hooks.php`: `after_form_definition` adds a three-option select
+   (offering PUBLIC only to a user who holds the capability — and when the course is
+   *already* public, freeze the control **with its current value still submitting**, so
+   saving an unrelated change never silently un-publishes); `after_form_submission` calls
+   `set_state()`.
+6. **Retire the old fields.** `db/upgrade.php` deletes the `unlisted` checkbox definition,
+   and `classes/local/fields.php` stops provisioning it. Because the environment is new,
+   copy the handful of existing rows first if you want (`intvalue = 1` → `STATE_UNLISTED`)
+   — it is ten idempotent lines — but hand-setting them is equally fine. **On m502 today:
+   courses 86 and 89 are unlisted, course 85 has `hotsite_publico = 1`.** Course 2 carries
+   only `hotsite_modelo` and must get nothing; write that as an assertion, it is the case a
+   careless query gets wrong.
+7. **Backup/restore classes** under `backup/moodle2/`. Without them the state is lost on
+   every course duplicate and restore, silently and in the un-hiding direction. On restore,
+   clamp an incoming PUBLIC to default unless the restoring user holds the publish capability
+   in the target course, and log it — nobody consents to publishing a course by restoring a
+   backup.
+
+## 5. Stage 2 — the public surface (`theme_boost_union_fundaseg`)
+
+1. `hotsite.php:61` — replace the `forcelogin`/`$values->publico` condition with
+   `\local_unlistedcourses\discoverability::is_public($course->id)`, guarded by
+   `class_exists()` and **failing closed** (treat a missing dependency as not public). Note
+   this sits ten lines from `redirector::is_ghosted()`, which deliberately fails **open**.
+   Document the asymmetry in both docblocks and pin it with a test that removes the class,
+   or someone will "harmonise" them and break one.
+2. `hotsite.php:77` — the `can_view_course_info()` guard must not run for an anonymous
+   visitor (it cannot pass). Gate it on `isloggedin()`. The category-visibility half of what
+   it was doing now lives inside `is_public()`.
+3. **`hotsite_page::summary_html()` passes `noclean => true`** (`:551-563`), which skips
+   HTMLPurifier unconditionally — bypassing even the trusted-author gate, because
+   `formatting.php:185-192` only consults trust when `$clean` is left null.
+   `moodle/course:update` is `RISK_XSS` by core's own classification and is CAP_ALLOW for
+   `editingteacher`. Behind login this is the accepted trust model; on a page the institution
+   pushes to its own logged-in students by WhatsApp it is stored XSS executing same-origin.
+   **This is blocking.** Drop `noclean` on the public path at minimum.
+4. **Remove `hotsite_publico`** from `hotsitefields.php` (const at `:83`, definition at
+   `:204`, read at `:468-469`) and from the `values()` payload. Remove the now-pointless
+   forced-login hiding in `classes/local/hook/course/after_form_definition.php:77` — but keep
+   that file's other job, the hotsite link placement, and its mutation tag.
+5. **Emit the `og:` tags** before `$OUTPUT->header()`. Escaping, one pass, and note the
+   direction: take values in the **plain** spelling
+   (`format_string(..., ['escape' => false])`, and `format_text()` → `strip_tags()` →
+   `shorten_text(…, 200)` for the description) and apply `s()` exactly once for the
+   `content="…"` attribute. Course 85 is named `Atendimento Pré-Hospitalar & Resgate` —
+   an ampersand — so it is the fixture that proves the escaping, and a
+   `<b>x</b>` fixture would prove nothing.
+6. `og:url` and `<link rel="canonical">` point at the hotsite's own URL. Emit `og:locale` as
+   `pt_BR` (Moodle's language code is `pt_br`; a direct copy is invalid).
+
+## 6. Stage 3 — the image
+
+`theme_boost_union_fundaseg_pluginfile()` in the theme's `lib.php` (the theme has no such
+function today), filearea `ogimage`, URL carrying `<courseid>/<contenthash>/og.jpg`.
+
+- Re-run `discoverability::is_public($courseid)` **from scratch** — the page that minted the
+  URL is not trusted — and verify the courseid matches the context's `instanceid`, so a URL
+  cannot pair one course's context with another's itemid.
+- Serve the course's own `course` / `overviewfiles` file. Do not copy it.
+- **`cacheability => 'private'`.** `send_stored_file()` defaults to `public` for any
+  anonymous requester (`filelib.php:2563-2577` only downgrades for a logged-in non-guest), so
+  a shared proxy would keep serving an unpublished course's image for the whole max-age with
+  nothing at the Moodle layer able to clear it.
+- The **contenthash in the path is the cache-buster**, and it is not optional: Facebook caches
+  a scrape ~24 h and only re-fetches via the Sharing Debugger, X and LinkedIn 7 days,
+  Telegram indefinitely. A stable filename means a replaced image never updates the preview.
+- Refuse with a bare `send_header_404()` and `exit`, **not** `send_file_not_found()` — that
+  throws, and the handler renders a full themed error page through `core_renderer::header()`
+  for an anonymous user, which is the render this whole design avoids. (Observed live: a
+  deleted probe file returned 500, not 404.)
+- Consider a 1200×630 JPEG derivative cached in `$CFG->localcachedir`, following
+  `theme_boost_union/lib.php:1030-1035`'s own precedent. It is what actually enforces
+  WhatsApp's ~600 KB ceiling instead of hoping the editor uploaded something small.
+- **Course 85 has no overview image**, so seed one before testing this stage.
+
+## 7. Stage 4 — gates
+
+- `mdl phpunit m502 local_unlistedcourses` and `… theme_boost_union_fundaseg`.
+- **Add an eighth tag to `mutations/gates.conf`** with its own `.pl` script for the new
+  predicate. This repo proves every guard by mutation; a new public method must not be the
+  exception. `mdl mutate moodle-local_unlistedcourses mutations/gates.conf`.
+- Behat: **the fleet stacks and their behat sites carry `forcelogin = 1` from the stack
+  config.** Scenarios exercising the public page must not switch it off — the whole point is
+  that it works with it on. Re-run `mdl behat-init` after any `version.php` bump.
+- `mdl ci moodle-local_unlistedcourses --matrix` and the same for the theme, both green,
+  local plugin pushed first.
+- Version bump + `CHANGELOG.md` in the same commit as the change that needs it, both repos.
+- `lang/en` and `lang/pt_br` in lockstep, alphabetically sorted, in the same commit.
+- Sweep for capabilities missing lang strings after installing (the query is in
+  `~/dev/CLAUDE.md`).
+
+## 8. Verification that the thing actually works
+
+Do this with real bytes, not by reading code:
+
+```sh
+curl -s -D - -A 'facebookexternalhit/1.1' \
+  'http://localhost:8502/theme/boost_union_fundaseg/hotsite.php?id=<public course>' -o /tmp/card.html
+grep -o 'pluginfile.php[^"]*\|flavours/[^"]*' /tmp/card.html | sort -u | while read u; do
+  printf '%s %s\n' "$(curl -s -o /dev/null -w '%{http_code}' -A 'facebookexternalhit/1.1' "http://localhost:8502/$u")" "$u"
+done
+```
+
+Assert: 200 on the page; every sub-resource 200; `og:title`, `og:description`, `og:image`,
+`og:url` present; `</head>` inside 32 768 bytes; and a **non-public** course id returns the
+same refusal as a nonexistent one.
+
+Then confirm the negative case: an unlisted course and a default course must both still 303
+to login for the same anonymous client.
+
+## 9. Known gaps to decide, not to code around
+
+- **Flavours will not brand the anonymous page.** `theme_boost_union_flavours_require_login_for_file()`
+  (`theme_boost_union/lib.php:1227-1252`) calls `require_login()` whenever `forcelogin` is on,
+  so a flavoured category's logo and background 303 to login. Course 85's category carries no
+  flavour, so this was never exercised — verify it on a flavoured course before shipping.
+  Separately, `flavourslib.php` keys flavours on the visitor's cohorts, and an anonymous
+  visitor has none, so a cohort-scoped flavour can never apply anonymously.
+- **Boost Union already leaks every course header image.** Demonstrated: a probe file on
+  course 86 (flagged unlisted) returned 200 with `Cache-Control: public, max-age=21600` to an
+  anonymous client under `forcelogin = 1`, while the course page 303'd. It cannot be fixed
+  from a child theme. Patch the fork, report upstream, or confirm the filearea is unused —
+  m502 holds zero such files. **This is a separate ticket, not part of this work.**
+- **`after_config` never fires on a router-served request.** `public/r.php:28` defines
+  `ABORT_AFTER_CONFIG` and `setup.php:607` returns ~600 lines before the dispatch at `:1209`.
+  The theme's existing enrolment forwarding and ghosting are silently absent from anything
+  the routing engine answers. Nothing breaks today because the intercepted URLs are real
+  files. **Separate ticket.**
+- **Every anonymous hit sets `MoodleSession`** with no consent surface (observed). Core's own
+  comparable endpoints define `NO_MOODLE_COOKIES`; a themed page cannot. Decide whether that
+  is acceptable for a public marketing page under LGPD.
+- **A public course with no `hotsite_modelo` is armed but inert** — the hotsite redirects, so
+  there is no anonymous page to reach. The editor sets the strongest state and observes
+  nothing. Say so in the help string.
+
+## 10. Owner decisions still open
+
+1. **Re-sign stage 8 of `docs/hotsite/README.md`** in the theme repo ("forcelogin stays ON,
+   hotsites serve authenticated users"). This narrows that dated production decision; it
+   needs the same signature, recorded as a new stage row rather than quietly amended.
+2. **Indexed by Google or not?** A 200-returning public page is Googlebot-fetchable and
+   Moodle ships no `robots.txt`, so the choice has to be made in a meta tag.
+3. **After un-publishing: hard 404 or an informative page?** Uniform refusal is what defeats
+   enumeration, and it turns every already-shared link into a dead end for your own audience.
+   The two goals are in direct conflict.
+4. **Is `$course->summary` the right public text**, or does this need a separate reviewed
+   "public description" field? Summaries were written for an internal audience.
+5. **Which brand does an anonymous preview carry**, given flavours cannot resolve without a
+   cohort? Does `og:site_name` need a per-course override?
+
+---
+
+## 11. Stage 1 status (2026-09-02)
+
+Delivered in the working tree of `local_unlistedcourses`, not yet committed, pending review:
+
+- `db/install.xml` (validated against `xmldb.xsd`), `db/upgrade.php` (creates the table,
+  copies ticked `unlisted` rows to UNLISTED, retires the field and its category),
+  `db/access.php`, `db/hooks.php`.
+- `classes/discoverability.php`, `classes/event/course_state_updated.php`,
+  `classes/hook_callbacks.php`, `classes/local/courseform.php`,
+  `classes/local/legacy_field.php`, a full privacy provider, and
+  `backup/moodle2/{backup,restore}_local_unlistedcourses_plugin.class.php`.
+- `access.php` rewired onto `discoverability::get_states()`; `fields.php` and
+  `db/install.php` removed.
+- Tests: `discoverability_test`, `local/courseform_test` (hook wiring proven through
+  `create_course()` / `update_course()`), `backup_restore_test`, `privacy/provider_test`,
+  `local/legacy_field_test`, `access_test` adapted, and `tests/behat/discoverability.feature`.
+  Ten new mutations in `mutations/gates.conf`.
+
+**One deviation from section 4, with the reason.** Item 2 says the capability check lives
+in `set_state()`; it does, for every transition that enters or leaves PUBLIC. Listed ↔
+unlisted carries no gate of its own in `set_state()`. A `moodle/course:visibility` gate was
+tried and dropped: every writer is already behind `moodle/course:update` or the restore
+capabilities, and core applies `visible` on restore without asking
+`moodle/course:visibility` (`restore_stepslib.php`, `process_course()` checks only
+`changeidnumber`, `changesummary` and `setforcedlanguage`) — so the extra gate would only
+ever refuse a restoring editing teacher, and refuse them in the un-hiding direction. The
+form still offers the control only to holders of `moodle/course:visibility`, mirroring
+core's own visibility select.
+
+**A second deviation, from item 7, found by the adversarial review.** The restore does not
+clamp an incoming PUBLIC to default ahead of the write; it writes through `set_state()` with
+the restoring user and logs the refusal. The clamp was untestable on a new course (the gate
+refuses identically) and wrong on an overwrite restore into an unlisted course, where
+clamping to default slipped past the gate and un-hid the course. The backup also emits the
+element for every course, listed included, so that "overwrite course configuration" resets
+the state the way core resets `visible`. And on a new course the form asks
+`guess_if_creator_will_have_course_capability()`, as core's own visibility select does.
+
+Measured on m502 after `mdl upgrade`: courses 86 and 89 carried over as UNLISTED, course 2
+got nothing, the `unlisted` field and its category are gone, the capability string sweep is
+empty, and both course forms render the control directly after "Course visibility".
+
+Two things the upgrade taught, recorded in the plugin's `CLAUDE.md`:
+`core_customfield\handler::reset_caches()` throws outside PHPUnit (the first upgrade run
+died after the migration and before the savepoint; the step is idempotent, so the second
+run completed), and a stack whose mounted code is newer than its installed plugin answers
+every course form with a 500 until the upgrade runs, because `has_capability()` on a
+capability that is not installed yet is a `debugging()` call that Whoops turns fatal.
+
+Owner decisions taken the same day, recorded for stage 2: (1) a new stage row in the
+theme's hotsite README, forcelogin stays 1; (2) `noindex`; (3) a non-public course answers
+anonymous visitors with the same 303 to login as today, id existing or not; (4) a new
+plain-text public description field in the theme's Hotsite category, `og:description`
+omitted when empty; (5) `og:site_name` is the site name, no per-course override.
+
+**Gates run on 2026-09-02.** `mdl phpunit m502 local_unlistedcourses`: 42 tests, 157
+assertions, green. `mdl behat m502 @local_unlistedcourses`: 2 scenarios, 34 steps, green.
+`mdl ci --only phpcs,phpdoc,phplint,validate,savepoints`: all green (these gates are
+branch-independent and ran on the 5.1 leg). **`mdl ci --matrix` cannot run on the corporate
+network**: every 5.02 leg dies in moodle-plugin-ci's install step because Moodle 5.2's
+`npm run update-packages` fetches the React bundle from esm.sh through Node's native
+`fetch`, which ignores the proxy — the fleet memory note on the Squid proxy records this as
+unsolved and expected; GitHub's runners have direct egress, so the PHP × DB legs (MariaDB
+included) run there after the push. The plugin's SQL is portable by construction
+(`get_in_or_equal`, `get_records_list`, `count_records_select`, a `LEFT JOIN … IS NULL`).
+
+**Theme suite measured against this version (2026-09-02, m502):** 85 tests, 289 assertions,
+**1 error** — `redirector_test::test_an_unlisted_course_ghosts_only_the_ineligible` still calls
+`\local_unlistedcourses\local\fields::ensure_fields()`. That, plus the four scenarios in
+`theme_boost_union_fundaseg_unlisted.feature` that seed `customfield_unlisted`, is the whole
+coupling stage 2 has to move onto `discoverability::set_state()`.
+
+**Home network, same day: the matrix ran.** `mdl ci --matrix --behat`: 8.4/pgsql (every
+static gate + PHPUnit + Behat), 8.3/pgsql and 8.3/MariaDB all PASS; 8.4/MariaDB died in
+`git clone` of core with a transient HTTP/2 error before any gate ran; re-run alone it passed
+every step, Behat included. **All four legs GitHub runs are green locally.**
+A second 5.2 stack, `m502b` on `localhost:9502`, now exists for parallel test runs: the same
+suite took 59 s there while the same run on m502 took 577 s, 518 s of it queued behind
+another session's mutation sweep.

@@ -24,15 +24,16 @@
 
 namespace local_unlistedcourses;
 
-use local_unlistedcourses\local\fields;
-
 /**
  * Decides whether the current user may discover a course.
  *
- * A course marked unlisted is discoverable only by someone who is actively
- * enrolled, has an application pending, or could enrol right now. Everyone
- * else must not learn that it exists - so the answer feeds course listings,
- * the enrolment page and anything else that would otherwise print its name.
+ * A course in the UNLISTED state ({@see discoverability}) is discoverable
+ * only by someone who is actively enrolled, has an application pending, or
+ * could enrol right now. Everyone else must not learn that it exists - so the
+ * answer feeds course listings, the enrolment page and anything else that
+ * would otherwise print its name. The other two states (listed, public) are
+ * discoverable by anybody; whether a PUBLIC course may be served to a visitor
+ * who is not logged in is {@see discoverability::is_public()}, not this.
  *
  * CURRENT USER ONLY, and not by choice. The two predicates this class
  * delegates to both read the $USER global rather than accepting a user id:
@@ -59,20 +60,17 @@ class access {
     /** @var array Request cache of the discoverability answer, keyed courseid => bool. */
     private static array $discoverable = [];
 
-    /** @var array Request cache of the unlisted flag, keyed courseid => bool. */
-    private static array $unlisted = [];
-
     /**
-     * Forget everything cached for this request.
+     * Forget everything cached for this request, the state cache included.
      *
-     * Called by tests, and by anything that changes a course's unlisted flag
-     * or the current user's enrolments inside one request.
+     * Called by tests, by {@see discoverability::set_state()}, and by anything
+     * that changes the current user's enrolments inside one request.
      *
      * @return void
      */
     public static function reset_caches(): void {
         self::$discoverable = [];
-        self::$unlisted = [];
+        discoverability::reset_caches();
     }
 
     /**
@@ -89,8 +87,8 @@ class access {
     /**
      * Whether the current user may discover each of these courses.
      *
-     * Resolves the unlisted flag for every id in ONE query and then evaluates
-     * eligibility only for the courses that are actually marked - which on a
+     * Resolves the state for every id in ONE query and then evaluates
+     * eligibility only for the courses that are actually unlisted - which on a
      * real site is a small minority of any listing, and is what keeps this
      * affordable. The expensive half (one enrol_get_instances() plus one
      * cohort_is_member() per instance, neither of which core caches anywhere)
@@ -115,9 +113,9 @@ class access {
             return $answers;
         }
 
-        $unlisted = self::unlisted_flags($unknown);
+        $states = discoverability::get_states($unknown);
         foreach ($unknown as $courseid) {
-            $answer = empty($unlisted[$courseid]) ? true : self::eligible($courseid);
+            $answer = ($states[$courseid] === discoverability::STATE_UNLISTED) ? self::eligible($courseid) : true;
             self::$discoverable[$courseid] = $answer;
             $answers[$courseid] = $answer;
         }
@@ -154,60 +152,6 @@ class access {
             }
         }
         return $kept;
-    }
-
-    /**
-     * Which of these courses carry the unlisted flag.
-     *
-     * One query over customfield_data, scoped by the resolved field id rather
-     * than by shortname: a same-named field belonging to another component
-     * must not be read as this plugin's flag.
-     *
-     * @param array $courseids Course ids.
-     * @return array Map of courseid => bool for every id given.
-     */
-    private static function unlisted_flags(array $courseids): array {
-        global $DB;
-
-        $flags = [];
-        $lookup = [];
-        foreach ($courseids as $courseid) {
-            if (isset(self::$unlisted[$courseid])) {
-                $flags[$courseid] = self::$unlisted[$courseid];
-            } else {
-                $flags[$courseid] = false;
-                $lookup[] = $courseid;
-            }
-        }
-        if (!$lookup) {
-            return $flags;
-        }
-
-        $field = fields::get_field(fields::SHORTNAME_UNLISTED);
-        if (!$field) {
-            // Not provisioned yet: nothing is unlisted, so nothing is hidden.
-            foreach ($lookup as $courseid) {
-                self::$unlisted[$courseid] = false;
-            }
-            return $flags;
-        }
-
-        [$insql, $params] = $DB->get_in_or_equal($lookup, SQL_PARAMS_NAMED, 'cid');
-        $params['fieldid'] = $field->get('id');
-        $sql = "SELECT d.instanceid
-                  FROM {customfield_data} d
-                 WHERE d.fieldid = :fieldid
-                   AND d.instanceid $insql
-                   AND d.intvalue = 1";
-        $marked = $DB->get_fieldset_sql($sql, $params);
-        $marked = array_map('intval', $marked);
-
-        foreach ($lookup as $courseid) {
-            $value = in_array($courseid, $marked, true);
-            self::$unlisted[$courseid] = $value;
-            $flags[$courseid] = $value;
-        }
-        return $flags;
     }
 
     /**

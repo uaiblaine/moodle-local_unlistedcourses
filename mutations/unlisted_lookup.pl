@@ -1,3 +1,3 @@
-# Make the flag lookup find nothing: every course reads as listed, so the whole
+# Make the state lookup never match: every course reads as listed, so the whole
 # plugin becomes a no-op while still being called.
-s/AND d\.intvalue = 1/AND d.intvalue = -1/;
+s/\(\$states\[\$courseid\] === discoverability::STATE_UNLISTED\)/(\$states[\$courseid] === -1)/;
