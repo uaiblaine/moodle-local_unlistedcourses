@@ -24,8 +24,6 @@
 
 namespace local_unlistedcourses;
 
-use core_course\customfield\course_handler;
-use local_unlistedcourses\local\fields;
 use PHPUnit\Framework\Attributes\CoversClass;
 
 /**
@@ -53,29 +51,25 @@ final class access_test extends \advanced_testcase {
     protected function setUp(): void {
         parent::setUp();
         access::reset_caches();
-        fields::reset_field_cache();
     }
 
     /**
-     * Mark a course unlisted, or clear the mark.
+     * Put a course in the unlisted state, or back in the default.
      *
-     * Saved as admin on purpose: instance_form_save() runs the field list
-     * through get_editable_fields(), which silently drops any field the
-     * current user cannot edit - so saving as anyone else writes nothing and
-     * the test would pass against an unmarked course.
+     * Done as admin so that the test's own viewer is never the actor, and
+     * the caches are reset so the new state is what the next assertion reads.
      *
      * @param int $courseid The course id.
-     * @param bool $unlisted Whether the course should carry the flag.
+     * @param bool $unlisted Whether the course should be unlisted.
      * @return void
      */
     private function set_unlisted(int $courseid, bool $unlisted): void {
         $current = $GLOBALS['USER'];
         $this->setAdminUser();
-        $handler = course_handler::create();
-        $handler->instance_form_save((object) [
-            'id' => $courseid,
-            'customfield_' . fields::SHORTNAME_UNLISTED => $unlisted ? 1 : 0,
-        ]);
+        discoverability::set_state(
+            $courseid,
+            $unlisted ? discoverability::STATE_UNLISTED : discoverability::STATE_DEFAULT
+        );
         $this->setUser($current);
         access::reset_caches();
     }
@@ -257,9 +251,19 @@ final class access_test extends \advanced_testcase {
      * @return void
      */
     public function test_the_site_course_is_discoverable_even_for_a_guest(): void {
+        global $DB;
+
         $this->resetAfterTest();
 
-        $this->set_unlisted(SITEID, true);
+        /* set_state() refuses the site course, so the row is written by hand: the
+           exemption exists for exactly that case, a row that arrived by a route the
+           API does not offer. */
+        $DB->insert_record(discoverability::TABLE, (object) [
+            'courseid' => SITEID,
+            'state' => discoverability::STATE_UNLISTED,
+            'usermodified' => 0,
+            'timemodified' => time(),
+        ]);
         $this->setGuestUser();
         access::reset_caches();
 

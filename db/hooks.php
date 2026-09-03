@@ -15,19 +15,29 @@
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Unlisted courses - Install-time provisioning
+ * Course discoverability - Hook callbacks registration
  *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
-/**
- * Provision the course custom field the plugin reads.
- *
- * @return bool Always true; provisioning failures are reported through debugging().
- */
-function xmldb_local_unlistedcourses_install() {
-    \local_unlistedcourses\local\fields::ensure_fields();
-    return true;
-}
+defined('MOODLE_INTERNAL') || die();
+
+$callbacks = [
+    [
+        'hook' => \core_course\hook\after_form_definition::class,
+        'callback' => \local_unlistedcourses\hook_callbacks::class . '::after_form_definition',
+        'priority' => 0,
+    ],
+    [
+        'hook' => \core_course\hook\after_form_submission::class,
+        'callback' => \local_unlistedcourses\hook_callbacks::class . '::after_form_submission',
+        'priority' => 0,
+    ],
+    [
+        'hook' => \core_course\hook\before_course_deleted::class,
+        'callback' => \local_unlistedcourses\hook_callbacks::class . '::before_course_deleted',
+        'priority' => 0,
+    ],
+];
