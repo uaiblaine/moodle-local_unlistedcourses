@@ -339,6 +339,43 @@ final class discoverability_test extends \advanced_testcase {
     }
 
     /**
+     * A public course in an unlisted category is not public; re-listing the category restores it.
+     *
+     * An anonymous visitor can never satisfy a cohort or a role, so no course
+     * with an unlisted category on its path may be served to one, however the
+     * course's own state reads.
+     *
+     * @return void
+     */
+    public function test_a_public_course_in_an_unlisted_category_is_not_public(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $unlistedcategory = $generator->create_category();
+        $courseinside = $generator->create_course(['category' => $unlistedcategory->id]);
+        $listedcategory = $generator->create_category();
+        $siblingcourse = $generator->create_course(['category' => $listedcategory->id]);
+
+        $this->setAdminUser();
+        category_discoverability::set_state((int) $unlistedcategory->id, category_discoverability::STATE_UNLISTED);
+        discoverability::set_state((int) $courseinside->id, discoverability::STATE_PUBLIC);
+        discoverability::set_state((int) $siblingcourse->id, discoverability::STATE_PUBLIC);
+
+        $this->assertFalse(
+            discoverability::is_public((int) $courseinside->id),
+            'A public course in an unlisted category must not be public.'
+        );
+        $this->assertTrue(
+            discoverability::is_public((int) $siblingcourse->id),
+            'Control: a public course in a listed sibling category stays public.'
+        );
+
+        // Re-listing the category makes the first course public again.
+        category_discoverability::set_state((int) $unlistedcategory->id, category_discoverability::STATE_DEFAULT);
+        $this->assertTrue(discoverability::is_public((int) $courseinside->id));
+    }
+
+    /**
      * A value this version does not know reads as listed - never as public.
      *
      * @return void

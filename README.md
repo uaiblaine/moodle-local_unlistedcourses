@@ -43,6 +43,39 @@ Somebody may discover an unlisted course when any of these holds:
 The gate itself is native: `enrol.customint5`, the "only cohort members" field both enrol
 plugins already carry.
 
+## Categories
+
+`\local_unlistedcourses\category_discoverability` holds the same decision for a **course
+category**, with two states, listed (no row) and unlisted: `get_states()`, `get_state()`,
+`is_unlisted()`, `unlisted_ids()` and `set_state()` - **the one place
+`local/unlistedcourses:managecategorystate` is checked**, on every real transition in both
+directions. A call that changes nothing needs no capability. Every change fires
+`\local_unlistedcourses\event\category_state_updated`.
+
+`\local_unlistedcourses\category_access` answers the per-viewer question for categories:
+`is_category_discoverable(int)`, `are_categories_discoverable(array)`,
+`filter_categories(array)`. The state is a property of the **path**: a category is
+effectively unlisted when it or any ancestor carries the row, and the viewer must satisfy
+**every** unlisted category on that path through one of three terms:
+
+- membership of a cohort whose context is that category's own - never an ancestor's, never
+  the system one - read from `{cohort_members}` directly, so an invisible cohort still grants;
+- a role assignment in that category's context or in an ancestor category context; a role at
+  a category below, or at a course inside, is a relationship with something it contains;
+- `moodle/category:viewhiddencategories` there, core's own idiom for staff, which is what
+  admits a manager or a course creator assigned at the system context.
+
+Site admins discover everything; visitors and guests discover nothing unlisted, at no query.
+With no category unlisted the whole predicate costs one query.
+
+**The category term applies to listings only.** `access::filter_courses()` also drops a
+course whose category is effectively unlisted unless the viewer is enrolled in it, has an
+application pending or is staff of it; being able to self-enrol right now does not rescue
+it. `is_course_discoverable()` keeps its meaning, because the theme ghosts the enrolment
+page, the course info page and the public landing page off it, and a listing rule must not
+become an enrolment block. `discoverability::is_public()` refuses a course with an unlisted
+category on its path: an anonymous visitor can satisfy none of the three terms.
+
 ## Where the state is written
 
 Four writers, one check. The course settings form gains a "Discoverability" select right
@@ -56,6 +89,15 @@ backup carries the state, for every course; a restore writes it through the same
 `set_state()`, so a restoring user who may not publish is refused there, the refusal is
 logged, and the target keeps the state it had. Nobody consents to publishing a course by
 restoring a backup.
+
+A category's state is written from one page, `local/unlistedcourses/category.php`, reached
+from the category's settings menu (the "More" menu of a category page): core dispatches no
+hook from the category form and has no custom field handler for categories. The page shows
+who will still see the category - the cohorts defined at it, behind `moodle/cohort:view`,
+the people holding a role here or above, and how many people it stays visible to besides
+staff, intersected over every unlisted category above it - and warns when that is nobody and
+when category themes are enabled. There is no backup or restore of a category's state:
+Moodle has no category backup a plugin could attach to.
 
 ## What this plugin does not do
 
@@ -76,7 +118,12 @@ course to somebody just removed from the cohort that gated it.
 
 **It does not cover every surface.** The predicate is only consulted where something calls
 it. Course files served through `pluginfile.php`, badge pages, the report builder and the
-web service layer each reach course names by their own route.
+web service layer each reach course names by their own route. For a category the list is
+longer and is written down in `docs/discoverability/README.md`, section 14: the course web
+services (`core_course_search_courses` is `ajax => true`, so any logged-in browser session
+can call it), the mobile app, the Navigation block, `block_course_list`, Boost Union smart
+menus, the report builder's category entity and the course request page all name a category
+by their own route. Unlisting is a listing rule, not a permission.
 
 ## Consequences worth knowing
 
@@ -90,9 +137,10 @@ plugin only says "may be served anonymously", it serves nothing itself.
 
 ## Privacy
 
-The state table records who last changed a course's state (`usermodified`). A deletion
-request detaches the user from the row and leaves the state in place: removing the row
-would un-hide or un-publish a course as a side effect of somebody leaving the site.
+Both state tables record who last changed a state (`usermodified`). A deletion request
+detaches the user from the row and leaves the state in place: removing the row would
+un-hide or un-publish a course, or un-hide a category, as a side effect of somebody leaving
+the site.
 
 ## Requirements
 

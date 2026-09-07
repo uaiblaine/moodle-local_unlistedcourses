@@ -6,6 +6,70 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+
+- **Course categories have a discoverability state of their own: listed or unlisted.** Stored
+  in a second table, `local_unlistedcourses_catstate`, a row only for an unlisted category;
+  read through `\local_unlistedcourses\category_discoverability` (`get_states()`,
+  `get_state()`, `is_unlisted()`, `unlisted_ids()`) and written through its `set_state()`,
+  **the one place the new capability `local/unlistedcourses:managecategorystate` is checked**
+  (manager by default; deliberately not `moodle/category:manage`, which lets its holder
+  rename, move and delete categories). A call that changes nothing needs no capability and
+  fires nothing; every change fires `category_state_updated`. The row follows the category:
+  core's `pre_course_category_delete` and `pre_course_category_delete_move` callbacks in
+  `lib.php` drop it. The privacy provider covers the new table the way it covers the course
+  one - a deletion request detaches the user, never the state. What an unlisted category
+  withholds, and from whom, is the predicate and the theme-side filtering of the next stages;
+  this stage is the state alone.
+- **Who an unlisted category is named to, and what that withholds from a listing.**
+  `\local_unlistedcourses\category_access` (`is_category_discoverable()`,
+  `are_categories_discoverable()`, `filter_categories()`) answers per viewer, and the state is
+  a property of the PATH: a category is effectively unlisted when it or any ancestor carries
+  the row, and the viewer must satisfy EVERY unlisted category on that path, not just one of
+  them. Satisfying one means belonging to a cohort whose context is that category's own,
+  holding any role in its context or in an ancestor CATEGORY context, or holding
+  `moodle/category:viewhiddencategories` there - core's own idiom for staff, which is what
+  admits a manager or a course creator assigned at the system context. Cohort membership is
+  read straight from `{cohort_members}`, never through `cohort_get_user_cohorts()`, so an
+  invisible cohort still grants; a cohort at the system context grants nothing, and neither
+  does a role at a course inside the category or at a category below it. Site admins discover
+  everything, visitors and guests discover nothing unlisted, and with no category unlisted the
+  whole predicate costs one query and answers yes. **The category term applies to LISTINGS
+  only**: `access::filter_courses()` now also drops a course whose category is effectively
+  unlisted, unless the viewer is enrolled in it, has an application pending, or is staff of
+  it - being able to self-enrol right now does not rescue it, which is the whole point, since
+  an open self-enrolment instance is the normal case inside such a category.
+  `access::is_course_discoverable()` keeps its present meaning on purpose: it gates the
+  enrolment page, the course info page and the public landing page, and a listing rule must
+  not become an enrolment block. `discoverability::is_public()` does clamp, because an
+  anonymous visitor can satisfy none of the three terms, so a public course inside an unlisted
+  category has nobody it could be served to.
+- **A page to set a category's state, and a preview of who that leaves it visible to.**
+  `local/unlistedcourses/category.php`, reached from **Discoverability** in the category's
+  own settings menu - core dispatches no hook on `course/editcategory.php` and categories
+  have no custom field handler, so the control is a page of the plugin's own, hung on the
+  `categorysettings` container that core sweeps into the category page's "More" menu
+  (`local_unlistedcourses_extend_settings_navigation()` in `lib.php`, guarded on the context
+  class, then the manage capability, then the container, in that order because it runs on
+  every page of the site). The page carries what a field on the core form never could:
+  `\local_unlistedcourses\output\category_preview` names the cohorts defined **at this
+  category** with their member counts, counts the people holding a role here or in a category
+  above, and states how many distinct people besides staff the category stays visible to -
+  intersected with the eligible set of every unlisted category above it, because the predicate
+  ANDs over the path and a cohort defined here admits nobody an ancestor withholds. It warns
+  when an ancestor is already unlisted (the rules compound), when the category has no
+  cohort of its own (a site-level cohort and an enrolment method's cohort restriction both
+  grant nothing here - the mistake the string exists to pre-empt), when unlisting would leave
+  the category visible to **nobody**, and when `allowcategorythemes` is on, since a theme set
+  on the category would switch its pages away from the theme that withholds it. Cohort names
+  are read only by a viewer holding `moodle/cohort:view`; the counts, which are a fact about
+  the site rather than about the reader, are not gated on it. `category_state_updated` now
+  links to this page instead of the category listing. **The capability check stays where it
+  was**: `category_discoverability::set_state()` is the boundary, and the page checks the same
+  capability only so that nobody is shown a form their save will refuse. Second version bump
+  of this branch, deliberately - `get_plugin_list_with_function()` caches the callback list
+  against the site's versions hash, so without it the navigation callback is simply not found.
+
 ### Changed
 
 - **The discoverability state moves out of the course custom field and into the plugin's

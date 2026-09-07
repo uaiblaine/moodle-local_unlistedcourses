@@ -505,3 +505,122 @@ Two traps met while writing the tests, recorded in the theme's `CLAUDE.md`:
 `$DB->insert_record()` silently drops a given `id` (only `insert_record_raw()` with
 `$customsequence = true` writes a row under a chosen id), and two GD images of the same size
 and colour are the same bytes, so two fixtures meant to differ shared one content hash.
+
+## 14. Unlisted categories (2026-09-05 to 2026-09-07)
+
+Design record and status of the category extension. The assessment this rests on - the
+measured facts, the judge panel over three designs, the refuted claims and the critic's
+corrections - is https://claude.ai/code/artifact/93b8097c-731e-4422-acd3-2e6e46f3916f.
+
+### What was built, and where
+
+| repo | branch | commits |
+|---|---|---|
+| `local_unlistedcourses` | `category-discoverability` | `da7678a` the state; `c2410e4` the predicate, the listing term and the public clamp; `03a1e39` the editing page |
+| `theme_boost_union_fundaseg` | `category-discoverability`, from `fix/hotsite-ghost` (`6a26c0e`, the hotsite ghost fix) | `92c10ac` the renderer withholding, the direct-link ghost, the kicker, the action bar template |
+
+Two shapes the request could not keep, both measured rather than chosen: the control is a
+page in the category's settings menu, not a field on the core form (`course/editcategory.php`
+and `core_course_editcategory_form` dispatch no hook, `core_course\hook\after_form_definition`
+is type-hinted to the COURSE form, and there is no custom field handler for categories); and
+enforcement stays in the theme's renderers, not in the capability layer. Writing `CAP_PREVENT`
+on `moodle/category:viewcourselist` in the category context was proven to work (a throwaway
+PHPUnit proof, 10 tests, on m502b) and is the only strategy that reaches web services, the
+mobile app, the navigation tree and `block_course_list` - but the manager role holds no
+`viewcourselist` of its own (`lib/db/access.php:740-748` lists `guest` and `user` only), so
+managers and teachers go dark unless re-granted; the `coursecat` session cache is invalidated
+by no capability or role write; and cohort membership would be materialised into role rows,
+which is the one thing this plugin forbids caching. It stays documented as the escalation.
+
+### Decisions, closed by the owner on 2026-09-06
+
+| id | decision |
+|---|---|
+| D1 | Only cohorts whose context IS the unlisted category's own context count. Not ancestors, not system. |
+| D2 | Any role assignment in the category's context or an ancestor CATEGORY context counts, plus `moodle/category:viewhiddencategories` there as the staff escape. System-context assignments do not. |
+| D3 | "Could self-enrol right now" never rescues a course from an unlisted category in listings. |
+| D4 | Unlisting a category withholds the courses inside it from listings, subject to the enrolled, pending-application and course-staff escapes. |
+| D5 | The editing UI is a page linked from the category settings menu, not a copy of `course/editcategory.php`. |
+| D6 | Enforcement in the theme's renderers plus one URL guard; the capability override is the documented escalation. |
+| D7 | The navigation tree and the breadcrumb are not pruned; recorded as residue. |
+| D8 | A new capability, `local/unlistedcourses:managecategorystate`, gates the state; not `moodle/category:manage`, which carries `RISK_XSS` and lets its holder rename, move and delete. |
+| D9 | The category selector of the action bar is removed for everyone by a template override: `make_categories_list()` names every category on the site with no capability required. |
+| D10 | An invisible cohort still grants; membership is read from `{cohort_members}` directly. |
+| D11 | The pre-existing hotsite gap is closed first: `hotsite.php` now asks `redirector::is_ghosted()` on its logged-in branch. |
+| D12 | The category term applies to LISTINGS only. `is_course_discoverable()` keeps its meaning, because the theme ghosts `enrol/index.php`, `course/info.php` and the hotsite off it, and a listing rule must not become an enrolment block. |
+
+### Semantics
+
+A category is effectively unlisted when it or any ancestor carries the row
+(`course_categories.path`). For EVERY unlisted category on the path the viewer must satisfy
+one term: cohort (D1), role (D2) or staff escape. Site admins see everything; visitors and
+guests see nothing unlisted, at no query. With no category unlisted the whole predicate costs
+one statement, and that fast path is held by a mutation gate. Role switching inside a course
+does not change a category answer, by choice: the raw role read ignores it, and
+`has_capability()` at a category context ignores a switch made at a descendant.
+
+| actor | sees the category in listings | opens `?categoryid=` | sees its courses |
+|---|---|---|---|
+| site admin, manager or course creator anywhere on the path | yes | yes | yes |
+| any role at the category or an ancestor category | yes | yes | yes |
+| member of a cohort at the category | yes | yes | yes |
+| member of a system cohort only; a bespoke system role | no | ghost | only their own |
+| editing teacher of a course inside, enrolled student, pending applicant | no | ghost | their own course, yes |
+| someone who merely could self-enrol | no | ghost | not in listings; a direct enrol link follows the course rule (D12) |
+| anonymous or guest | no | core's own refusal | no |
+
+### Coverage and residue
+
+Covered by the theme: the category page tree and its paging bar, the front page combo and
+categories lists, the AJAX expander (`course/category.ajax.php`), the node of any category
+handed to the renderer, the expand arrow and the tree's "Expand all" control when every child
+is unlisted, search results and tagged courses (through the plugin's listing term), the
+"Category: name" line of a course box, Boost Union's card and list badge, a direct
+`/course/index.php?categoryid=N` link, the hotsite kicker for a logged-in viewer, the
+anonymous hotsite and its Open Graph tags (through `is_public()`), and the category selector
+of the action bar (D9).
+
+What still names an unlisted category, worst first. Every row is a consequence of enforcing
+above the capability layer; this is a listing rule, not a permission.
+
+| # | surface | leaks | disposition |
+|---|---|---|---|
+| 1 | `core_course_search_courses`, `core_course_get_courses_by_field` (`lib/db/services.php:681-689`, `:732-738`) | category id and name and the courses; the search one is `ajax => true`, callable from any logged-in browser session | structural; remove from the site's services when the app is not in use |
+| 2 | `core_course_get_categories`, `core_course_get_courses`, `core_enrol_get_users_courses`, the Moodle App | names and ids | structural; revisit D6 if the app is in scope |
+| 3 | Boost Union smart menu items listing courses (`smartmenu_item.php:1024-1077`, `:1576-1588`) | every course of an unlisted category, cached per user; pre-existing for unlisted courses too | operational: no course-listing smart menu over unlisted categories |
+| 4 | navigation tree, course index drawer, `block_navigation` | name and link | structural: node builders run at page init (D7) |
+| 5 | `block_course_list` | top-level names as raw anchors | structural: no renderer call; do not place the block |
+| 6 | breadcrumb on a course page inside the category | name and link | reachable only by someone already on a course there (D7) |
+| 7 | report builder category entity and categories datasource (`course_category.php:129` bypasses visibility) | full nested path to any report audience | operational: no category columns in reports shared beyond staff |
+| 8 | `course/request.php:78` heading | the requested category's name | operational: keep course requests off |
+| 9 | `block_myoverview` and friends (`course_summary_exporter.php:68`) | raw category name of the viewer's own courses | low: courses the viewer already keeps |
+| 10 | calendar paths that bypass visibility (`calendar/lib.php:826,1138,2677`, `coursecat_proxy.php:86`) | a category event's title | accept, staff-adjacent |
+| 11 | theme switch vectors: `allowcategorythemes` (set from the category form itself), `allowcohortthemes`, `allowuserthemes`, `allowcoursethemes`, `allowthemechangeonurl` | everything, by leaving the enforcing theme | operational: all five off; the editing page warns on the first |
+| 12 | manage-categories action bar, course settings category select, course search list, backup copy form | names as options | accept: behind staff capabilities |
+| 13 | existence oracle on an id: core's `unknowncategory` carries the id, the ghost is uniform | whether an id exists | accepted, same shape as the course ghost |
+| 14 | any future caller of `core_course_category::get($id, $strictness, true)` | name | twelve sites in core 5.2 today; sweep on each upgrade |
+| 15 | RSS and feed paths | verified clean 2026-09-06: no feed library fills an item category | closed |
+
+### Verified facts, not to be re-derived
+
+- `core_course_category::can_view_category()`: `course/classes/category.php:684-693`; `get()` throws `cannotviewcategory` at `:279-283`; `get_not_visible_children_ids()` at `:1219-1247` caches per session (`lib/db/caches.php:194-201`, TTL 600, invalidated by no role or capability write).
+- No hook on the category form: `course/editcategory.php` and `course/classes/editcategory_form.php`, byte-identical on 5.3-dev; `get_plugins_callback_function()` is used only for `pre_course_category_delete` (`:2031`) and `pre_course_category_delete_move` (`:2203`), which pass a record and a `core_course_category` object respectively.
+- `local_<plugin>_extend_settings_navigation()` runs on category pages with the category's context; a node under `categorysettings` (`settings_navigation.php:1523`) reaches the secondary navigation's More menu (`views/secondary.php:736`). The callback list is cached by the versions hash: a version bump is what makes it found.
+- `cohort_is_member()` is a bare `record_exists` (`cohort/lib.php:239-243`); `cohort_get_user_cohorts()` filters `visible = 1` (`:558-565`); `cohort_delete_category()` moves a deleted category's cohorts up (`:164-181`); `cohort_get_cohorts()` returns `['totalcohorts', 'cohorts', 'allcohorts']`, paginated and capability-free (`:445-490`).
+- The dynamic cohorts fork writes `cohort_members` in bulk with no member events (`rule_manager.php:356-404`): nothing here caches across requests.
+- Boost Union overrides `coursecat_category` (675), `coursecat_tree` (762) and `course_category` (837) and not `coursecat_subcategories` or `course_category_name`; its card presentation names the category through `util\course::get_category()` (`classes/util/course.php:113-124`), never through core's line.
+- Core's `course/templates/category_actionbar.mustache` example context declares `additionaloptions` as an object where the action bar exports a string (`category_action_bar.php:182-186`): a verbatim copy fails the mustache lint.
+- `$PAGE->set_category_by_id()` reads the raw record and checks nothing (`lib/pagelib.php`); `core_course_category::get()` must come first on the editing page.
+- On m502 (2026-09-06): every theme-switch setting off except `allowthemechangeonurl`; 1,802 cohorts in category contexts against 202 at system; no smart menu items; web services and the app disabled. Production was not checked from here.
+
+### Stage status
+
+| stage | gates, as measured |
+|---|---|
+| 0 baseline (2026-09-06) | plugin 47 tests, 4 matrix legs, 20 of 20 gates; theme 231 tests, 4 legs; sweeps: RSS clean, indexes present, `alwaysreturnhidden` sites listed |
+| D11 | Behat 6 of 6 with the ghost scenario proven red by a hand mutation; theme matrix 4 of 4 |
+| 1 the state | schema validates; upgrade on both 5.2 stacks; 5 static steps; 60 tests; capability-string sweep empty; 6 of 6 gates |
+| 2 the predicate | 86 tests; 5 static steps; 14 of 14 new gates, 41 of 41 in a full sweep; a latent defect in the course memo (keyed by course alone) found by the review and fixed |
+| 3 the page | 105 tests; 6 static steps with mustache; Behat 5 of 5; 8 of 8 gates |
+| 4 the theme | 246 tests; 7 static steps; Behat 10 of 10; 11 of 11 gates; the card-presentation gap found by the review and closed |
+| 5 hand-off | this section; both matrices with Behat and the plugin's full sweep are the remaining gates before any push |
