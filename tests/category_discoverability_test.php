@@ -267,7 +267,14 @@ final class category_discoverability_test extends \advanced_testcase {
         $this->assertSame(category_discoverability::STATE_UNLISTED, $relisted->other['oldstate']);
         $this->assertSame(category_discoverability::STATE_DEFAULT, $relisted->other['newstate']);
         $this->assertStringContainsString("'{$category->id}'", $unlisted->get_description());
-        $this->assertSame((int) $category->id, (int) $unlisted->get_url()->get_param('categoryid'));
+        /* The event points at the page that edits the state, not at the category listing:
+           a reader following this from the log wants the control that produced the entry.
+           Both halves are asserted, so a URL pointing anywhere else fails here. */
+        $this->assertStringContainsString(
+            '/local/unlistedcourses/category.php',
+            $unlisted->get_url()->out(false)
+        );
+        $this->assertSame((int) $category->id, (int) $unlisted->get_url()->get_param('id'));
     }
 
     /**

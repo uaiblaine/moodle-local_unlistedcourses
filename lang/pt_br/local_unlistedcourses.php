@@ -24,9 +24,29 @@
 
 defined('MOODLE_INTERNAL') || die();
 
+$string['categorystate'] = 'Descobribilidade';
+$string['categorystate_help'] = 'Quem pode saber que esta categoria existe.
+
+* **Listada**: a categoria e seus cursos aparecem nas listagens como qualquer outra.
+* **Não listada**: a categoria só é nomeada a quem é membro de uma coorte definida nesta categoria, a quem tem um papel nesta categoria ou em uma categoria acima dela, e à equipe (gerentes e criadores de curso). Todas as demais pessoas deixam de ver a categoria, suas subcategorias e seus cursos no índice de cursos, na página inicial e nos resultados de busca; um curso dentro dela continua nas listagens de quem já está inscrito nele, tem uma candidatura aguardando decisão ou o leciona. Um curso público dentro de uma categoria não listada deixa de ser público.
+
+Isto é uma regra de listagem, não uma permissão. Esconde a categoria das páginas que este site renderiza; serviços web, o aplicativo móvel, o bloco de Navegação e os menus inteligentes de lista de cursos continuam nomeando-a, e um link direto para um curso continua seguindo as regras do próprio curso. Coortes criadas no nível do site não contam, e a coorte à qual um método de inscrição restringe as inscrições também não: só uma coorte definida nesta categoria, ou um papel atribuído aqui, abre a categoria.';
+$string['categorystate_saved'] = 'Descobribilidade da categoria salva';
 $string['event_category_state_updated'] = 'Estado de descobribilidade da categoria de curso atualizado';
 $string['event_course_state_updated'] = 'Estado de descobribilidade do curso atualizado';
 $string['pluginname'] = 'Descobribilidade de cursos';
+$string['preview_ancestor'] = 'Uma categoria acima desta está não listada, então a regra dela também vale aqui: a pessoa precisa satisfazer todas as categorias não listadas do caminho.';
+$string['preview_cohortmembers'] = 'Membros: {$a}';
+$string['preview_cohorts'] = 'Coortes definidas nesta categoria';
+$string['preview_cohortsmore'] = 'mais {$a} não mostradas';
+$string['preview_cohortsnone'] = 'Nenhuma coorte está definida nesta categoria. Coortes criadas no nível do site não contam aqui, e a coorte à qual um método de inscrição restringe as inscrições também não: crie uma coorte nesta categoria, ou atribua papéis aqui.';
+$string['preview_cohortsnoview'] = 'Você não pode ver as coortes desta categoria.';
+$string['preview_heading'] = 'Quem vê esta categoria enquanto ela está não listada';
+$string['preview_managecohorts'] = 'Gerenciar as coortes desta categoria';
+$string['preview_roleholders'] = '{$a} pessoas têm um papel nesta categoria ou em uma categoria acima dela.';
+$string['preview_theme'] = 'Temas por categoria estão habilitados neste site (allowcategorythemes). Um tema definido nesta categoria tiraria as páginas dela do tema que a oculta.';
+$string['preview_visible'] = 'Além da equipe, esta categoria está visível no momento para {$a} pessoas.';
+$string['preview_visiblenone'] = 'Não listada e visível para ninguém além da equipe: nenhum membro de coorte e nenhum detentor de papel. Todos os demais usuários deixarão de ver esta categoria e seus cursos.';
 $string['privacy:metadata:local_unlistedcourses_catstate'] = 'O estado de descobribilidade de cada categoria de curso que não está no estado padrão, e quem o alterou por último.';
 $string['privacy:metadata:local_unlistedcourses_catstate:categoryid'] = 'A categoria de curso à qual o estado pertence.';
 $string['privacy:metadata:local_unlistedcourses_catstate:state'] = 'O estado: listada ou não listada.';

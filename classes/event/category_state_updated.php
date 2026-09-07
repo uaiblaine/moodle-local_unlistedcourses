@@ -67,12 +67,16 @@ class category_state_updated extends \core\event\base {
     }
 
     /**
-     * The URL related to the event: the category itself.
+     * The URL related to the event: the page where the state is edited.
+     *
+     * Not the category listing: a reader following this from the log wants the
+     * control that produced the entry, and the page names who the state leaves the
+     * category visible to.
      *
      * @return \moodle_url
      */
     public function get_url() {
-        return new \moodle_url('/course/index.php', ['categoryid' => $this->objectid]);
+        return new \moodle_url('/local/unlistedcourses/category.php', ['id' => $this->objectid]);
     }
 
     /**

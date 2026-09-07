@@ -44,6 +44,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   not become an enrolment block. `discoverability::is_public()` does clamp, because an
   anonymous visitor can satisfy none of the three terms, so a public course inside an unlisted
   category has nobody it could be served to.
+- **A page to set a category's state, and a preview of who that leaves it visible to.**
+  `local/unlistedcourses/category.php`, reached from **Discoverability** in the category's
+  own settings menu - core dispatches no hook on `course/editcategory.php` and categories
+  have no custom field handler, so the control is a page of the plugin's own, hung on the
+  `categorysettings` container that core sweeps into the category page's "More" menu
+  (`local_unlistedcourses_extend_settings_navigation()` in `lib.php`, guarded on the context
+  class, then the manage capability, then the container, in that order because it runs on
+  every page of the site). The page carries what a field on the core form never could:
+  `\local_unlistedcourses\output\category_preview` names the cohorts defined **at this
+  category** with their member counts, counts the people holding a role here or in a category
+  above, and states how many distinct people besides staff the category stays visible to -
+  intersected with the eligible set of every unlisted category above it, because the predicate
+  ANDs over the path and a cohort defined here admits nobody an ancestor withholds. It warns
+  when an ancestor is already unlisted (the rules compound), when the category has no
+  cohort of its own (a site-level cohort and an enrolment method's cohort restriction both
+  grant nothing here - the mistake the string exists to pre-empt), when unlisting would leave
+  the category visible to **nobody**, and when `allowcategorythemes` is on, since a theme set
+  on the category would switch its pages away from the theme that withholds it. Cohort names
+  are read only by a viewer holding `moodle/cohort:view`; the counts, which are a fact about
+  the site rather than about the reader, are not gated on it. `category_state_updated` now
+  links to this page instead of the category listing. **The capability check stays where it
+  was**: `category_discoverability::set_state()` is the boundary, and the page checks the same
+  capability only so that nobody is shown a form their save will refuse. Second version bump
+  of this branch, deliberately - `get_plugin_list_with_function()` caches the callback list
+  against the site's versions hash, so without it the navigation callback is simply not found.
 
 ### Changed
 

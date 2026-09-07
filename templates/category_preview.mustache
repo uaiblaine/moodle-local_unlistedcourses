@@ -1,0 +1,95 @@
+{{!
+    This file is part of Moodle - http://moodle.org/
+
+    Moodle is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    Moodle is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
+}}
+{{!
+    @template local_unlistedcourses/category_preview
+
+    Who still sees a course category while it is unlisted.
+
+    Rendered from local_unlistedcourses\output\category_preview into the state form on
+    the category page. Every cohort name arrives in its plain spelling and is escaped
+    here by the double stash it lands in.
+
+    Context variables required for this template - named in prose, because a Mustache
+    comment ends at its first closing pair and a tag written here would truncate it:
+
+    * state - int, the stored state: 0 listed, 1 unlisted.
+    * unlisted - bool, this category's own row says unlisted.
+    * ancestorunlisted - bool, a category above this one is unlisted.
+    * cohortsviewable - bool, the viewer may read the cohort names of this category.
+    * cohorts - array of the cohorts defined at this category, each carrying a name
+      string and a members int.
+    * hascohorts - bool, that array is not empty.
+    * cohortsmore - int, how many further cohorts exist beyond the ones named.
+    * cohortsurl - string, the cohort administration page of this category.
+    * roleholders - int, people holding a role here or in a category above this one.
+    * visiblecount - int, distinct people the category stays visible to, staff aside.
+    * nobodywarning - bool, unlisted and visible to nobody besides staff.
+    * themewarning - bool, category themes are enabled on this site.
+
+    Example context (json):
+    {
+        "state": 1,
+        "unlisted": true,
+        "ancestorunlisted": true,
+        "cohortsviewable": true,
+        "cohorts": [
+            {"name": "Nursing 2026", "members": 42},
+            {"name": "Nursing 2027", "members": 17}
+        ],
+        "hascohorts": true,
+        "cohortsmore": 3,
+        "cohortsurl": "https://example.com/cohort/index.php?contextid=25",
+        "roleholders": 4,
+        "visiblecount": 61,
+        "nobodywarning": false,
+        "themewarning": true
+    }
+}}
+<div class="local-unlistedcourses-preview">
+    <h4>{{#str}}preview_heading, local_unlistedcourses{{/str}}</h4>
+    {{#ancestorunlisted}}
+        <div class="alert alert-info" role="alert">{{#str}}preview_ancestor, local_unlistedcourses{{/str}}</div>
+    {{/ancestorunlisted}}
+    {{#cohortsviewable}}
+        {{#hascohorts}}
+            <p class="fw-bold mb-1">{{#str}}preview_cohorts, local_unlistedcourses{{/str}}</p>
+            <ul class="list-unstyled mb-2">
+                {{#cohorts}}
+                    <li class="mb-1"><span>{{name}}</span> <span class="badge bg-secondary text-dark">{{#str}}preview_cohortmembers, local_unlistedcourses, {{members}}{{/str}}</span></li>
+                {{/cohorts}}
+                {{#cohortsmore}}
+                    <li class="text-muted">{{#str}}preview_cohortsmore, local_unlistedcourses, {{cohortsmore}}{{/str}}</li>
+                {{/cohortsmore}}
+            </ul>
+            <p class="mb-2"><a href="{{cohortsurl}}">{{#str}}preview_managecohorts, local_unlistedcourses{{/str}}</a></p>
+        {{/hascohorts}}
+        {{^hascohorts}}
+            <div class="alert alert-warning" role="alert">{{#str}}preview_cohortsnone, local_unlistedcourses{{/str}}</div>
+        {{/hascohorts}}
+    {{/cohortsviewable}}
+    {{^cohortsviewable}}
+        <p class="text-muted">{{#str}}preview_cohortsnoview, local_unlistedcourses{{/str}}</p>
+    {{/cohortsviewable}}
+    <p class="mb-1">{{#str}}preview_roleholders, local_unlistedcourses, {{roleholders}}{{/str}}</p>
+    <p class="mb-2">{{#str}}preview_visible, local_unlistedcourses, {{visiblecount}}{{/str}}</p>
+    {{#nobodywarning}}
+        <div class="alert alert-warning" role="alert">{{#str}}preview_visiblenone, local_unlistedcourses{{/str}}</div>
+    {{/nobodywarning}}
+    {{#themewarning}}
+        <div class="alert alert-warning" role="alert">{{#str}}preview_theme, local_unlistedcourses{{/str}}</div>
+    {{/themewarning}}
+</div>

@@ -59,3 +59,46 @@ function local_unlistedcourses_pre_course_category_delete($category): void {
 function local_unlistedcourses_pre_course_category_delete_move($category, $newparentcat): void {
     category_discoverability::on_category_deleted((int) $category->id);
 }
+
+/**
+ * Put the category discoverability page in a course category's settings menu.
+ *
+ * There is no hook and no callback on the category settings form:
+ * course/editcategory.php builds core_course_editcategory_form and dispatches
+ * nothing, and categories have no custom field handler either. So the control
+ * is a page of this plugin's own, hung on the 'categorysettings' container
+ * core builds in settings_navigation::load_category_settings(), which
+ * secondary::load_category_navigation() sweeps into the category page's "More"
+ * menu. The default placement is what puts it there, so
+ * set_show_in_secondary_navigation(false) is deliberately NOT called.
+ *
+ * THE GUARD ORDER IS THE POINT: this runs on every page of the site, so the
+ * cheapest test comes first. The context class is checked before the
+ * capability, because has_capability() resolves a role definition and this
+ * callback would otherwise pay for it on every course, activity and profile
+ * page; the container is looked up last, because find() walks the tree.
+ *
+ * @param settings_navigation $settingsnav The settings navigation being built.
+ * @param \core\context|null $context The context of the page being rendered.
+ * @return void
+ */
+function local_unlistedcourses_extend_settings_navigation(settings_navigation $settingsnav, ?\core\context $context): void {
+    if (!$context instanceof \core\context\coursecat) {
+        return;
+    }
+    if (!has_capability(category_discoverability::CAPABILITY_MANAGE, $context)) {
+        return;
+    }
+    $node = $settingsnav->find('categorysettings', \navigation_node::TYPE_CONTAINER);
+    if (!$node) {
+        return;
+    }
+    $node->add(
+        get_string('categorystate', 'local_unlistedcourses'),
+        new moodle_url('/local/unlistedcourses/category.php', ['id' => $context->instanceid]),
+        \navigation_node::TYPE_SETTING,
+        null,
+        'unlistedcoursescatstate',
+        new pix_icon('i/hide', '')
+    );
+}
