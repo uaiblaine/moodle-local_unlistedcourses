@@ -24,8 +24,14 @@
 
 defined('MOODLE_INTERNAL') || die();
 
+$string['event_category_state_updated'] = 'Estado de descobribilidade da categoria de curso atualizado';
 $string['event_course_state_updated'] = 'Estado de descobribilidade do curso atualizado';
 $string['pluginname'] = 'Descobribilidade de cursos';
+$string['privacy:metadata:local_unlistedcourses_catstate'] = 'O estado de descobribilidade de cada categoria de curso que não está no estado padrão, e quem o alterou por último.';
+$string['privacy:metadata:local_unlistedcourses_catstate:categoryid'] = 'A categoria de curso à qual o estado pertence.';
+$string['privacy:metadata:local_unlistedcourses_catstate:state'] = 'O estado: listada ou não listada.';
+$string['privacy:metadata:local_unlistedcourses_catstate:timemodified'] = 'Quando o estado foi alterado pela última vez.';
+$string['privacy:metadata:local_unlistedcourses_catstate:usermodified'] = 'O usuário que alterou o estado pela última vez.';
 $string['privacy:metadata:local_unlistedcourses_state'] = 'O estado de descobribilidade de cada curso que não está no estado padrão, e quem o alterou por último.';
 $string['privacy:metadata:local_unlistedcourses_state:courseid'] = 'O curso ao qual o estado pertence.';
 $string['privacy:metadata:local_unlistedcourses_state:state'] = 'O estado: listado, não listado ou público.';
@@ -42,4 +48,5 @@ $string['state_help'] = 'Quem pode saber que este curso existe.
 * **Público**: além de listado, a página de apresentação do curso pode ser lida por visitantes não autenticados, de modo que um link compartilhado mostra uma prévia em aplicativos de mensagem e redes sociais. Só um usuário autorizado a publicar cursos pode marcar ou desmarcar isto. Um curso oculto, ou dentro de uma categoria oculta, nunca é público, diga o que disser esta opção. Se o curso não tem página de apresentação configurada, esta opção não produz efeito visível até que tenha.';
 $string['state_public'] = 'Público';
 $string['state_unlisted'] = 'Não listado';
+$string['unlistedcourses:managecategorystate'] = 'Definir se uma categoria de curso é listada ou não listada';
 $string['unlistedcourses:publish'] = 'Publicar um curso para visitantes não autenticados';

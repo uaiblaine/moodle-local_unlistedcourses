@@ -24,8 +24,14 @@
 
 defined('MOODLE_INTERNAL') || die();
 
+$string['event_category_state_updated'] = 'Course category discoverability state updated';
 $string['event_course_state_updated'] = 'Course discoverability state updated';
 $string['pluginname'] = 'Course discoverability';
+$string['privacy:metadata:local_unlistedcourses_catstate'] = 'The discoverability state of each course category that is not in the default state, and who last changed it.';
+$string['privacy:metadata:local_unlistedcourses_catstate:categoryid'] = 'The course category the state belongs to.';
+$string['privacy:metadata:local_unlistedcourses_catstate:state'] = 'The state: listed or unlisted.';
+$string['privacy:metadata:local_unlistedcourses_catstate:timemodified'] = 'When the state was last changed.';
+$string['privacy:metadata:local_unlistedcourses_catstate:usermodified'] = 'The user who last changed the state.';
 $string['privacy:metadata:local_unlistedcourses_state'] = 'The discoverability state of each course that is not in the default state, and who last changed it.';
 $string['privacy:metadata:local_unlistedcourses_state:courseid'] = 'The course the state belongs to.';
 $string['privacy:metadata:local_unlistedcourses_state:state'] = 'The state: listed, unlisted or public.';
@@ -42,4 +48,5 @@ $string['state_help'] = 'Who may learn that this course exists.
 * **Public**: in addition to being listed, the course\'s landing page can be read by visitors who are not logged in, so a shared link shows a preview in messaging apps and social networks. Only a user allowed to publish courses can set or unset this. A hidden course, or a course inside a hidden category, is never public whatever this says. Where the course has no landing page configured, this setting has no visible effect until one is.';
 $string['state_public'] = 'Public';
 $string['state_unlisted'] = 'Unlisted';
+$string['unlistedcourses:managecategorystate'] = 'Set whether a course category is listed or unlisted';
 $string['unlistedcourses:publish'] = 'Publish a course to visitors who are not logged in';

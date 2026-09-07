@@ -43,4 +43,20 @@ $capabilities = [
             'manager' => CAP_ALLOW,
         ],
     ],
+
+    /*
+     * Decide whether a course category is listed or unlisted. Its own
+     * capability rather than moodle/category:manage, which carries RISK_XSS
+     * and lets the holder rename, move and delete categories: a site should
+     * be able to delegate "hide this programme from listings" without handing
+     * over the category tree. No risk bitmask - the act hides a listing and
+     * exposes nothing.
+     */
+    'local/unlistedcourses:managecategorystate' => [
+        'captype' => 'write',
+        'contextlevel' => CONTEXT_COURSECAT,
+        'archetypes' => [
+            'manager' => CAP_ALLOW,
+        ],
+    ],
 ];

@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+
+- **Course categories have a discoverability state of their own: listed or unlisted.** Stored
+  in a second table, `local_unlistedcourses_catstate`, a row only for an unlisted category;
+  read through `\local_unlistedcourses\category_discoverability` (`get_states()`,
+  `get_state()`, `is_unlisted()`, `unlisted_ids()`) and written through its `set_state()`,
+  **the one place the new capability `local/unlistedcourses:managecategorystate` is checked**
+  (manager by default; deliberately not `moodle/category:manage`, which lets its holder
+  rename, move and delete categories). A call that changes nothing needs no capability and
+  fires nothing; every change fires `category_state_updated`. The row follows the category:
+  core's `pre_course_category_delete` and `pre_course_category_delete_move` callbacks in
+  `lib.php` drop it. The privacy provider covers the new table the way it covers the course
+  one - a deletion request detaches the user, never the state. What an unlisted category
+  withholds, and from whom, is the predicate and the theme-side filtering of the next stages;
+  this stage is the state alone.
+
 ### Changed
 
 - **The discoverability state moves out of the course custom field and into the plugin's
