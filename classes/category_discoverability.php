@@ -241,6 +241,7 @@ class category_discoverability {
         /* Every answer composed from this state is stale now: the category answers, and
            the course answers that take the category into account. */
         self::reset_caches();
+        category_access::reset_caches();
         access::reset_caches();
         self::$states[$categoryid] = $state;
 
@@ -271,6 +272,7 @@ class category_discoverability {
 
         $DB->delete_records(self::TABLE, ['categoryid' => $categoryid]);
         self::reset_caches();
+        category_access::reset_caches();
         access::reset_caches();
     }
 }

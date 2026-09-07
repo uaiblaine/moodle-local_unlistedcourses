@@ -75,6 +75,27 @@ final class access_test extends \advanced_testcase {
     }
 
     /**
+     * Put a course category in the unlisted state, or back in the default.
+     *
+     * Done as admin so that the test's own viewer is never the actor, and the
+     * caches are reset so the new state is what the next assertion reads.
+     *
+     * @param int $categoryid The category id.
+     * @param bool $unlisted Whether the category should be unlisted.
+     * @return void
+     */
+    private function set_category_unlisted(int $categoryid, bool $unlisted): void {
+        $current = $GLOBALS['USER'];
+        $this->setAdminUser();
+        category_discoverability::set_state(
+            $categoryid,
+            $unlisted ? category_discoverability::STATE_UNLISTED : category_discoverability::STATE_DEFAULT
+        );
+        $this->setUser($current);
+        access::reset_caches();
+    }
+
+    /**
      * Add a self enrolment instance to a course, optionally gated on a cohort.
      *
      * @param \stdClass $course The course.
@@ -505,6 +526,320 @@ final class access_test extends \advanced_testcase {
         $this->assertFalse(
             access::is_course_discoverable((int) $course->id),
             'Control: the gate must still be refusing an ordinary user.'
+        );
+    }
+
+    /**
+     * A course in an unlisted category is withheld from listings, but stays discoverable on its own.
+     *
+     * This is the D12 split: the category term applies to filter_courses() and
+     * nothing else. is_course_discoverable() answers on the course's own state
+     * alone, because the theme's after_config guard ghosts the enrolment and
+     * hotsite pages off that method, and a listing rule must never become an
+     * enrolment block.
+     *
+     * @return void
+     */
+    public function test_a_course_in_an_unlisted_category_is_withheld_from_listings_but_stays_discoverable(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $unlistedcategory = $generator->create_category();
+        $courseincategory = $generator->create_course(['category' => $unlistedcategory->id]);
+        $listedcategory = $generator->create_category();
+        $siblingcourse = $generator->create_course(['category' => $listedcategory->id]);
+        $this->set_category_unlisted((int) $unlistedcategory->id, true);
+
+        $this->setUser($generator->create_user());
+        access::reset_caches();
+
+        $courses = [
+            'a' => (object) ['id' => (int) $courseincategory->id],
+            'b' => (object) ['id' => (int) $siblingcourse->id],
+        ];
+        $kept = access::filter_courses($courses);
+        $this->assertSame(
+            ['b'],
+            array_keys($kept),
+            'Control: a sibling course in a listed category must survive the same filter_courses() call.'
+        );
+
+        // D12: the course's OWN discoverability answer is unchanged - the split applies to listings only.
+        $this->assertTrue(access::is_course_discoverable((int) $courseincategory->id));
+    }
+
+    /**
+     * An enrolled student keeps a course in an unlisted category in listings.
+     *
+     * @return void
+     */
+    public function test_an_enrolled_student_keeps_a_course_in_an_unlisted_category_in_listings(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $category = $generator->create_category();
+        $course = $generator->create_course(['category' => $category->id]);
+        $this->set_category_unlisted((int) $category->id, true);
+
+        $student = $generator->create_user();
+        $generator->enrol_user($student->id, $course->id);
+
+        $this->setUser($student);
+        access::reset_caches();
+        $kept = access::filter_courses([(object) ['id' => (int) $course->id]]);
+        $this->assertCount(1, $kept, 'An enrolled student keeps a course in an unlisted category.');
+
+        // Control: an outsider in the same run does not.
+        $this->setUser($generator->create_user());
+        access::reset_caches();
+        $this->assertCount(
+            0,
+            access::filter_courses([(object) ['id' => (int) $course->id]]),
+            'Control: the category clamp must still be refusing an outsider.'
+        );
+    }
+
+    /**
+     * A pending applicant keeps a course in an unlisted category in listings.
+     *
+     * @return void
+     */
+    public function test_a_pending_applicant_keeps_a_course_in_an_unlisted_category_in_listings(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $category = $generator->create_category();
+        $course = $generator->create_course(['category' => $category->id]);
+        $instance = $this->add_apply_enrol($course, 0);
+        if (!$instance) {
+            $this->markTestSkipped('enrol_apply (fleet fork) is not installed.');
+        }
+        $this->set_category_unlisted((int) $category->id, true);
+
+        $applicant = $generator->create_user();
+        $plugin = enrol_get_plugin('apply');
+        $plugin->enrol_user(
+            $instance,
+            $applicant->id,
+            $DB->get_field('role', 'id', ['shortname' => 'student']),
+            0,
+            0,
+            ENROL_USER_SUSPENDED
+        );
+
+        $this->setUser($applicant);
+        access::reset_caches();
+        $this->assertCount(
+            1,
+            access::filter_courses([(object) ['id' => (int) $course->id]]),
+            'An applicant awaiting a decision keeps a course in an unlisted category.'
+        );
+
+        // Control: someone who never applied does not.
+        $this->setUser($generator->create_user());
+        access::reset_caches();
+        $this->assertCount(0, access::filter_courses([(object) ['id' => (int) $course->id]]));
+    }
+
+    /**
+     * Course staff keep a course in an unlisted category in listings.
+     *
+     * @return void
+     */
+    public function test_course_staff_keep_a_course_in_an_unlisted_category_in_listings(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $category = $generator->create_category();
+        $course = $generator->create_course(['category' => $category->id]);
+        $this->set_category_unlisted((int) $category->id, true);
+
+        $manager = $generator->create_user();
+        role_assign(
+            $DB->get_field('role', 'id', ['shortname' => 'manager']),
+            $manager->id,
+            \core\context\coursecat::instance($category->id)->id
+        );
+
+        $this->setUser($manager);
+        access::reset_caches();
+        $this->assertCount(
+            1,
+            access::filter_courses([(object) ['id' => (int) $course->id]]),
+            'Course staff keep a course in an unlisted category in listings.'
+        );
+
+        // Control: a plain user in the same run does not.
+        $this->setUser($generator->create_user());
+        access::reset_caches();
+        $this->assertCount(0, access::filter_courses([(object) ['id' => (int) $course->id]]));
+    }
+
+    /**
+     * Being able to self-enrol does not rescue a course in an unlisted category in listings (D3).
+     *
+     * @return void
+     */
+    public function test_being_able_to_self_enrol_does_not_rescue_a_course_in_an_unlisted_category_in_listings(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $category = $generator->create_category();
+        $course = $generator->create_course(['category' => $category->id]);
+        $instance = $this->add_self_enrol($course, 0);
+        $this->set_category_unlisted((int) $category->id, true);
+
+        $user = $generator->create_user();
+        $this->setUser($user);
+        access::reset_caches();
+
+        $plugin = enrol_get_plugin('self');
+        $this->assertTrue(
+            $plugin->can_self_enrol($instance, false) === true,
+            'Precondition: the user really could self-enrol right now.'
+        );
+        $this->assertCount(
+            0,
+            access::filter_courses([(object) ['id' => (int) $course->id]]),
+            'D3: being able to self-enrol must not rescue a course in an unlisted category.'
+        );
+
+        // Control: with the category listed, the same self-enrolable course is kept for the same user.
+        $this->set_category_unlisted((int) $category->id, false);
+        access::reset_caches();
+        $this->assertCount(1, access::filter_courses([(object) ['id' => (int) $course->id]]));
+    }
+
+    /**
+     * A cohort member of the unlisted category sees its courses in listings.
+     *
+     * @return void
+     */
+    public function test_a_cohort_member_of_the_category_sees_its_courses_in_listings(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $category = $generator->create_category();
+        $course = $generator->create_course(['category' => $category->id]);
+        $this->set_category_unlisted((int) $category->id, true);
+
+        $cohort = $generator->create_cohort(['contextid' => \core\context\coursecat::instance($category->id)->id]);
+        $member = $generator->create_user();
+        cohort_add_member($cohort->id, $member->id);
+
+        $this->setUser($member);
+        access::reset_caches();
+        $this->assertCount(
+            1,
+            access::filter_courses([(object) ['id' => (int) $course->id]]),
+            'A cohort member of the unlisted category sees its courses in listings.'
+        );
+
+        // Control: an outsider does not.
+        $this->setUser($generator->create_user());
+        access::reset_caches();
+        $this->assertCount(0, access::filter_courses([(object) ['id' => (int) $course->id]]));
+    }
+
+    /**
+     * filter_courses() fetches the category of items that do not carry it, in one query for all of them.
+     *
+     * The second half measures that claim instead of asserting it in prose. The
+     * two calls run the same code over the same state and differ only in how
+     * many categories have to be fetched, so a per-course lookup is the only
+     * thing that could make the larger listing read more than the smaller one.
+     *
+     * @return void
+     */
+    public function test_filter_courses_fetches_the_category_of_items_that_do_not_carry_it(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $category = $generator->create_category();
+        $hidden = $generator->create_course(['category' => $category->id]);
+        $this->set_category_unlisted((int) $category->id, true);
+        $open = $generator->create_course();
+
+        $this->setUser($generator->create_user());
+        access::reset_caches();
+
+        $courses = [
+            'x' => (object) ['id' => (int) $hidden->id],
+            'y' => (object) ['id' => (int) $open->id],
+        ];
+        $kept = access::filter_courses($courses);
+
+        $this->assertSame(['y'], array_keys($kept), 'Items without ->category must still be resolved and filtered.');
+
+        $listed = $generator->create_category();
+        $small = [];
+        for ($i = 0; $i < 2; $i++) {
+            $small[] = (object) ['id' => (int) $generator->create_course(['category' => $listed->id])->id];
+        }
+        $large = [];
+        for ($i = 0; $i < 8; $i++) {
+            $large[] = (object) ['id' => (int) $generator->create_course(['category' => $listed->id])->id];
+        }
+
+        access::reset_caches();
+        $before = $DB->perf_get_reads();
+        $this->assertCount(2, access::filter_courses($small));
+        $smallreads = $DB->perf_get_reads() - $before;
+
+        access::reset_caches();
+        $before = $DB->perf_get_reads();
+        $this->assertCount(8, access::filter_courses($large));
+        $largereads = $DB->perf_get_reads() - $before;
+
+        $this->assertLessThanOrEqual(
+            $smallreads,
+            $largereads,
+            'The category fetch must not grow with the listing: eight items must not read more than two.'
+        );
+    }
+
+    /**
+     * The memoised discoverability answer is keyed by the viewer, not held globally.
+     *
+     * An unlisted course's answer is entirely a property of the viewer -
+     * eligible() reads $USER through is_enrolled(), has_capability() and
+     * can_self_enrol() - so a memo keyed by the course alone would answer for
+     * whoever asked first. There is deliberately no reset between the two
+     * viewers below: that is the whole point of the test.
+     *
+     * @return void
+     */
+    public function test_the_discoverability_memo_is_keyed_by_the_viewer(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $course = $generator->create_course();
+        $cohort = $generator->create_cohort();
+        $this->add_self_enrol($course, (int) $cohort->id);
+        $this->set_unlisted((int) $course->id, true);
+
+        $member = $generator->create_user();
+        cohort_add_member($cohort->id, $member->id);
+        $outsider = $generator->create_user();
+
+        $this->setUser($member);
+        access::reset_caches();
+        $this->assertTrue(
+            access::is_course_discoverable((int) $course->id),
+            'Precondition: the gating cohort must be admitting its member.'
+        );
+
+        // Deliberately no reset_caches() here: the memo must be keyed by the viewer, not global.
+        $this->setUser($outsider);
+        $this->assertFalse(
+            access::is_course_discoverable((int) $course->id),
+            'A different viewer, with no reset in between, must get their own answer.'
         );
     }
 }

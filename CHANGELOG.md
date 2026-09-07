@@ -21,6 +21,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   one - a deletion request detaches the user, never the state. What an unlisted category
   withholds, and from whom, is the predicate and the theme-side filtering of the next stages;
   this stage is the state alone.
+- **Who an unlisted category is named to, and what that withholds from a listing.**
+  `\local_unlistedcourses\category_access` (`is_category_discoverable()`,
+  `are_categories_discoverable()`, `filter_categories()`) answers per viewer, and the state is
+  a property of the PATH: a category is effectively unlisted when it or any ancestor carries
+  the row, and the viewer must satisfy EVERY unlisted category on that path, not just one of
+  them. Satisfying one means belonging to a cohort whose context is that category's own,
+  holding any role in its context or in an ancestor CATEGORY context, or holding
+  `moodle/category:viewhiddencategories` there - core's own idiom for staff, which is what
+  admits a manager or a course creator assigned at the system context. Cohort membership is
+  read straight from `{cohort_members}`, never through `cohort_get_user_cohorts()`, so an
+  invisible cohort still grants; a cohort at the system context grants nothing, and neither
+  does a role at a course inside the category or at a category below it. Site admins discover
+  everything, visitors and guests discover nothing unlisted, and with no category unlisted the
+  whole predicate costs one query and answers yes. **The category term applies to LISTINGS
+  only**: `access::filter_courses()` now also drops a course whose category is effectively
+  unlisted, unless the viewer is enrolled in it, has an application pending, or is staff of
+  it - being able to self-enrol right now does not rescue it, which is the whole point, since
+  an open self-enrolment instance is the normal case inside such a category.
+  `access::is_course_discoverable()` keeps its present meaning on purpose: it gates the
+  enrolment page, the course info page and the public landing page, and a listing rule must
+  not become an enrolment block. `discoverability::is_public()` does clamp, because an
+  anonymous visitor can satisfy none of the three terms, so a public course inside an unlisted
+  category has nobody it could be served to.
 
 ### Changed
 

@@ -178,6 +178,13 @@ class discoverability {
      * capability involved. Every category on the path must exist and be
      * visible; a missing ancestor fails closed.
      *
+     * An unlisted category on the path refuses it too. That is not a second
+     * rule but the same one: {@see category_access} admits a viewer through a
+     * cohort membership, a role assignment or a capability, and an anonymous
+     * visitor can hold none of the three, so a course inside an unlisted
+     * category has nobody it could be served to anonymously. Answering
+     * otherwise would let "public" quietly outrank the category above it.
+     *
      * Independent of the viewer, unlike everything in {@see access}.
      *
      * @param int $courseid The course id.
@@ -201,6 +208,9 @@ class discoverability {
         }
         $ids = array_map('intval', array_filter(explode('/', (string) $category->path)));
         if (!$ids) {
+            return false;
+        }
+        if (array_intersect($ids, category_discoverability::unlisted_ids())) {
             return false;
         }
 

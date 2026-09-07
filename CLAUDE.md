@@ -143,7 +143,7 @@ without `model` while the reviewers around them were correctly downgraded.
   course too; a manager role there would also grant publish and void the clamp test.
 - **`enrol_apply` is absent from a fresh test site's `enrol_plugins_enabled`** —
   `add_apply_enrol()` in `access_test` enables it first.
-- **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds nineteen
+- **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds forty-one
   guards, and each must redden a test. Adding a guard without a mutation is how untested
   ones get in. The first sweep found one that reddened nothing — the restore clamp above —
   and it turned out to be wrong code, not a missing test.
@@ -156,6 +156,11 @@ without `model` while the reviewers around them were correctly downgraded.
   made mid-sweep is either lost to the restore or left with the last mutation still applied.
   Wait for the exit marker, then diff.
 - `theme_boost_union_fundaseg` couples to this plugin: its `redirector_test` and
-  `unlisted.feature` set the flag through the retired custom field and go red on a stack
-  where this version is installed — they move to `set_state()` / the state table with the
-  theme's own stage of this work.
+  `unlisted.feature` write through `set_state()` as admin, and its renderer and
+  `after_config` hook consume `access::filter_courses()` and `access::is_course_discoverable()`.
+  A change to either predicate's meaning is a change to that theme's tests too.
+- **Every per-viewer memo is keyed by the viewer as well as the thing asked about.**
+  `setUser()` in a test and "log in as" on the site switch `$USER` inside one request, and a
+  memo keyed by the course alone handed the first viewer's answer to the second. The review
+  of the category predicate found the course memo doing exactly that; `course_memo_viewer`
+  and `cat_memo_viewer` are the gates, and `access::memo_key()` is the one place the key is built.
