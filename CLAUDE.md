@@ -6,11 +6,15 @@ for this plugin.
 
 A **local plugin** that owns one decision per course: who may learn that it exists —
 listed, unlisted, or public (served to visitors who are not logged in, under
-`forcelogin = 1`). One table (`local_unlistedcourses_state`, a row only for non-default
-states), one capability (`local/unlistedcourses:publish`), one event, no settings, no
-output. **The component name is narrower than its scope** — it was born as "unlisted
-courses" and now owns "public" too; renaming a component means uninstall + reinstall, so
-the name stays and the strings talk about discoverability. Moodle **5.2 only**
+`forcelogin = 1`) — and the same decision per course category, listed or unlisted. Two
+tables (`local_unlistedcourses_state`, `local_unlistedcourses_catstate`, a row only for
+non-default states), two capabilities (`local/unlistedcourses:publish`,
+`local/unlistedcourses:managecategorystate`), two events, no settings, one page
+(`category.php`, the category's editing surface, with one template for its preview). **The
+component name is narrower than its scope** — it was born as "unlisted courses" and now
+owns "public" and categories too; renaming a component means uninstall + reinstall, so the
+name stays and the strings talk about discoverability. The design record of the category
+work is `docs/discoverability/README.md`, section 14. Moodle **5.2 only**
 (`$plugin->supported = [502, 502]`); one CI job in `.github/workflows/ci.yml` — update it
 when the range changes. Mounted on m502 at `local/unlistedcourses`. The implementation
 brief for the public-page work, with the measured facts it rests on, is
@@ -143,7 +147,7 @@ without `model` while the reviewers around them were correctly downgraded.
   course too; a manager role there would also grant publish and void the clamp test.
 - **`enrol_apply` is absent from a fresh test site's `enrol_plugins_enabled`** —
   `add_apply_enrol()` in `access_test` enables it first.
-- **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds forty-one
+- **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds forty-nine
   guards, and each must redden a test. Adding a guard without a mutation is how untested
   ones get in. The first sweep found one that reddened nothing — the restore clamp above —
   and it turned out to be wrong code, not a missing test.
@@ -164,3 +168,40 @@ without `model` while the reviewers around them were correctly downgraded.
   memo keyed by the course alone handed the first viewer's answer to the second. The review
   of the category predicate found the course memo doing exactly that; `course_memo_viewer`
   and `cat_memo_viewer` are the gates, and `access::memo_key()` is the one place the key is built.
+- **A category's state is a property of the PATH, and the quantifier over the path is AND.**
+  `category_access` reads `course_categories.path`, and for every unlisted category on it the
+  viewer must satisfy one of three terms: a cohort whose context IS that category's own (never
+  an ancestor's, never the system one, and read from `{cohort_members}` with no `visible`
+  filter, because `cohort_get_user_cohorts()` filters `visible = 1` and an invisible cohort
+  still grants); a role at that category or an ancestor CATEGORY context, matched against the
+  path prefix up to that category so a role below it grants nothing; or
+  `moodle/category:viewhiddencategories` there. The empty-set fast path — one query when no
+  category is unlisted — is load-bearing and has its own gate, because an optimisation that
+  can silently disable the feature must not be free to.
+- **The category term lives in `access::filter_courses()` and nowhere else.** Never move it
+  into `is_course_discoverable()`: the theme's `after_config` hook ghosts `enrol/index.php`,
+  `course/info.php` and the hotsite off that method, so a listing rule placed there becomes an
+  enrolment block on a platform whose product is enrolment. The three escapes from the term
+  are relationships with the course — enrolled, application pending, staff — and `can_enrol()`
+  is deliberately not one of them.
+- **`$PAGE->set_category_by_id()` checks nothing.** It reads the raw record. On
+  `category.php` the `core_course_category::get($id, MUST_EXIST)` call is the only visibility
+  gate and must stay ahead of it.
+- **`local_unlistedcourses_extend_settings_navigation()` is found through
+  `get_plugin_list_with_function()`, which caches by the versions hash.** Adding or renaming
+  a plugin callback in `lib.php` needs a version bump, or the callback is not found for a
+  reason that reads as a code fault. It is also why this branch bumped the version twice.
+- **`cohort_get_cohorts()` returns `['totalcohorts', 'cohorts', 'allcohorts']`, paginated, and
+  checks no capability.** The preview passes an explicit page size, reads that shape, and sits
+  behind `moodle/cohort:view` for the NAMES only; the counts are computed over every cohort at
+  the category, gated on nothing, because "is anybody left" must not depend on who is reading.
+  Names go into a double stash in the plain spelling. The visible-to-N count intersects the
+  eligible set of every unlisted ancestor, as the predicate ANDs them.
+- **There is no backup or restore of a category's state.** Moodle has no category backup a
+  plugin could attach to; the row follows the category through core's
+  `pre_course_category_delete` and `pre_course_category_delete_move` callbacks in `lib.php`.
+- **Core's Behat cohort generator places a cohort in a category context** through
+  `contextlevel | reference` columns (`behat_core_generator::preprocess_cohort()`); the
+  plugin's own context file, `tests/behat/behat_local_unlistedcourses.php`, provides only the
+  category-state step, and carries no `MOODLE_INTERNAL` guard for the reason the fleet file
+  gives.
