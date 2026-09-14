@@ -170,6 +170,51 @@ class discoverability {
     }
 
     /**
+     * The join and the column a bulk statement uses to read each course's own state beside its row.
+     *
+     * THE ONLY WAY TO READ THE STATE OF A POPULATION. {@see get_states()} takes
+     * the ids it is asked about and hands them to the database as one IN list,
+     * which is the right shape for a page of courses and the wrong one for a
+     * subtree of thousands: get_in_or_equal() emits one placeholder per id and
+     * never chunks, so a caller listing a whole category tree would either hit
+     * the protocol's parameter ceiling or pay a statement per chunk. A LEFT
+     * JOIN on this table costs nothing per row and carries no parameter at all,
+     * so a listing that already runs one statement over {course} reads the
+     * state in that same statement.
+     *
+     * The caller selects the column under a name of its own and compares it
+     * against the STATE_* constants. Two rules travel with it, and the second
+     * is the one that matters: a course without a row reads as the default
+     * (that is what the COALESCE is for), and a value the table holds that is
+     * NOT one of the known states must be read as listed and never as public -
+     * so an anonymous page tests `= STATE_PUBLIC` (an unknown value fails that
+     * for free) and never `<> STATE_UNLISTED`.
+     *
+     * Both aliases are interpolated into SQL, so they are checked against the
+     * shape of an identifier and anything else is refused before a statement
+     * is built.
+     *
+     * @param string $coursealias The alias of the {course} table in the caller's statement.
+     * @param string $alias The alias to give this table; must be unused in the caller's statement.
+     * @return array{join: string, column: string} The LEFT JOIN clause and the COALESCEd state expression.
+     * @throws \coding_exception When either alias is not a plain identifier.
+     */
+    public static function state_sql(string $coursealias, string $alias = 'lus'): array {
+        foreach ([$coursealias, $alias] as $identifier) {
+            if (!preg_match('/^[a-z][a-z0-9_]{0,29}$/', $identifier)) {
+                throw new \coding_exception('state_sql() aliases must be plain lowercase identifiers.');
+            }
+        }
+        if ($coursealias === $alias) {
+            throw new \coding_exception('state_sql() needs two different aliases.');
+        }
+        return [
+            'join' => "LEFT JOIN {" . self::TABLE . "} {$alias} ON {$alias}.courseid = {$coursealias}.id",
+            'column' => "COALESCE({$alias}.state, " . self::STATE_DEFAULT . ")",
+        ];
+    }
+
+    /**
      * Whether the course's landing page may be served to a visitor who is not logged in.
      *
      * This is the gate for an anonymous page, so it delegates to no capability:

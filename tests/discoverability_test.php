@@ -590,4 +590,76 @@ final class discoverability_test extends \advanced_testcase {
         $DB->insert_records(discoverability::TABLE, $rows);
         return $ids;
     }
+
+    /**
+     * The bulk join reads every course's own state in the caller's statement, and unknown values read as listed.
+     *
+     * Three courses, one per state, plus a fourth whose row holds a value no
+     * state constant names (written straight into the table, as a broken
+     * upgrade or a hand edit would): the column comes back 0, 1 and 2 for the
+     * first three and the raw value for the fourth, which is why the docblock
+     * tells an anonymous caller to test equality with STATE_PUBLIC and never
+     * inequality with STATE_UNLISTED - the same statement, compared both ways,
+     * shows the difference.
+     */
+    public function test_state_sql_reads_the_state_of_a_population_in_one_statement(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $category = $generator->create_category();
+        $listed = $generator->create_course(['category' => $category->id]);
+        $unlisted = $generator->create_course(['category' => $category->id]);
+        $public = $generator->create_course(['category' => $category->id]);
+        $broken = $generator->create_course(['category' => $category->id]);
+
+        $this->setAdminUser();
+        discoverability::set_state((int) $unlisted->id, discoverability::STATE_UNLISTED);
+        discoverability::set_state((int) $public->id, discoverability::STATE_PUBLIC);
+        $DB->insert_record(discoverability::TABLE, (object) [
+            'courseid' => $broken->id, 'state' => 7, 'usermodified' => 2, 'timemodified' => time(),
+        ]);
+
+        $sql = discoverability::state_sql('c');
+        $reads = $DB->perf_get_reads();
+        $rows = $DB->get_records_sql(
+            "SELECT c.id, {$sql['column']} AS state
+               FROM {course} c
+                    {$sql['join']}
+              WHERE c.category = :category",
+            ['category' => $category->id]
+        );
+        $this->assertSame(1, $DB->perf_get_reads() - $reads, 'The state of a population costs the caller no statement of its own.');
+
+        $this->assertSame(discoverability::STATE_DEFAULT, (int) $rows[$listed->id]->state);
+        $this->assertSame(discoverability::STATE_UNLISTED, (int) $rows[$unlisted->id]->state);
+        $this->assertSame(discoverability::STATE_PUBLIC, (int) $rows[$public->id]->state);
+        $this->assertSame(7, (int) $rows[$broken->id]->state);
+
+        // The two comparisons an anonymous caller could write, and why only one of them is safe.
+        $ispublic = $DB->get_fieldset_sql(
+            "SELECT c.id FROM {course} c {$sql['join']}
+              WHERE c.category = :category AND {$sql['column']} = :public ORDER BY c.id",
+            ['category' => $category->id, 'public' => discoverability::STATE_PUBLIC]
+        );
+        $this->assertSame([(int) $public->id], array_map('intval', $ispublic));
+        $notunlisted = $DB->get_fieldset_sql(
+            "SELECT c.id FROM {course} c {$sql['join']}
+              WHERE c.category = :category AND {$sql['column']} <> :unlisted ORDER BY c.id",
+            ['category' => $category->id, 'unlisted' => discoverability::STATE_UNLISTED]
+        );
+        $this->assertContains((int) $broken->id, array_map('intval', $notunlisted), 'Inequality admits the unknown value.');
+
+        // The aliases are interpolated into SQL, so anything but an identifier is refused.
+        foreach (['c d', 'c;', 'C', '1c', ''] as $bad) {
+            try {
+                discoverability::state_sql($bad);
+                $this->fail("Alias '{$bad}' was accepted.");
+            } catch (\coding_exception $e) {
+                $this->assertStringContainsString('identifier', $e->getMessage());
+            }
+        }
+        $this->expectException(\coding_exception::class);
+        discoverability::state_sql('c', 'c');
+    }
 }
