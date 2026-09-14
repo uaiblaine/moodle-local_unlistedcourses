@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **A bulk statement can read every course's own state in its own SELECT** (version
+  `2026091301`, release `v5.2-r4`): `discoverability::state_sql($coursealias)` returns the
+  `LEFT JOIN` on the state table and a `COALESCE`d column for the caller to select and compare
+  against the `STATE_*` constants. It exists because `get_states()` hands the ids it is asked
+  about to the database as one `IN` list, which is the right shape for a page and the wrong one
+  for a category subtree of thousands of courses - `get_in_or_equal()` never chunks - and the
+  theme's category listing runs one statement over `{course}` anyway. Two rules travel with the
+  helper and its test pins both: a course without a row reads as listed, and an unknown value in
+  the table must be read as listed and never as public, so an anonymous caller compares
+  `= STATE_PUBLIC` and never `<> STATE_UNLISTED`. Both aliases are checked against the shape of an
+  identifier before they are interpolated.
+
 - **Course categories have a third discoverability state: public** (version `2026091300`,
   release `v5.2-r3`). A public category's page may be served to visitors who are not logged
   in, and inside it **only the courses whose own state is Public are served to them** - an

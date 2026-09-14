@@ -749,3 +749,35 @@ so every surface that leaks an unlisted category's name is simply not a leak for
 | schema | `xmllint --noout --schema lib/xmldb/xmldb.xsd db/install.xml` validates |
 | mutations | six new gates — `cat_publish_gate`, `cat_public_needs_visible`, `cat_public_needs_ancestor`, `cat_public_fail_closed`, `filter_public_course_term`, `prime_ignored` — and two rewritten (`public_ignores_state`, `public_needs_category`, whose lines moved into `are_public()`); 62 in the spec, swept by the verifier |
 | Behat | one new scenario, written and not run in this stage: the suite is the verifier's, and Behat costs minutes |
+
+## 16. The bulk state join (2026-09-13)
+
+The theme's category showcase (its plan: `theme_boost_union_fundaseg/docs/category/README.md`,
+stage 2) lists a whole subtree in one statement over `{course}`, and needs each course's own
+state beside the row. `get_states()` is the wrong shape for that: it hands the ids it is asked
+about to the database as one `IN` list, and `get_in_or_equal()` never chunks, so a subtree of
+thousands of courses would be thousands of bound parameters in one statement.
+
+`discoverability::state_sql(string $coursealias, string $alias = 'lus'): array` is the answer,
+and it is the **only** way to read the state of a population: a `LEFT JOIN` on
+`{local_unlistedcourses_state}` and a `COALESCE(state, 0)` column, no parameters, for the caller
+to select under its own name and compare against the `STATE_*` constants. Two rules travel with
+it, both pinned by `test_state_sql_reads_the_state_of_a_population_in_one_statement`:
+
+- a course without a row reads as the default, which is what the `COALESCE` is for;
+- a value the table holds that no constant names reads as **listed, never public** — so an
+  anonymous caller writes `= STATE_PUBLIC` (an unknown value fails that for free) and never
+  `<> STATE_UNLISTED`. The test writes such a row and runs both comparisons.
+
+Both aliases are interpolated into SQL and are refused unless they are plain lowercase
+identifiers. Version `2026091301` / `v5.2-r4`, no schema change, no new gate: the helper holds no
+guard, only a shape.
+
+### Stage status
+
+| gate | as measured, 2026-09-13, local |
+|---|---|
+| PHPUnit | the new test green on m502b (`discoverability_test`, 1 more test than stage 15's 125) |
+| static | `phpcs`, `phpdoc` OK on `MOODLE_502_STABLE` |
+| matrix | `mdl ci --matrix --behat`: all four 5.02 legs (8.3/8.4 × pgsql/mariadb) PASS, Behat included |
+| mutations | none added: the helper holds no guard |
