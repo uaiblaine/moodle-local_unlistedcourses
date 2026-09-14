@@ -8,6 +8,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Course categories have a third discoverability state: public** (version `2026091300`,
+  release `v5.2-r3`). A public category's page may be served to visitors who are not logged
+  in, and inside it **only the courses whose own state is Public are served to them** - an
+  unlisted course and an unlisted subcategory stay withheld, and a listed course is not
+  offered to a visitor at all, because a course reaches the internet when, and only when,
+  somebody said so about that course. Entering or leaving the state needs a capability of its
+  own, **`local/unlistedcourses:publishcategory`** (coursecat context, `RISK_SPAM`, manager by
+  default, deliberately without `clonepermissionsfrom`), checked in
+  `category_discoverability::set_state()` on top of the manage capability that already gates
+  every real transition: hiding a category from listings is an editing act, publishing it to
+  the open web is not, and folding the second into the first would grant the larger power
+  through a rename. A save that changes nothing still needs neither.
+- **The predicate that decides it**, `category_discoverability::is_public()` and its batched
+  twin `are_public()`: own state public, own row visible, every category on the path existing
+  and visible, no category on the path unlisted. **Ancestors need not be public** - the same
+  composition `discoverability::is_public()` has always used for courses, so a site does not
+  have to publish its whole root to publish one programme area. Viewer-independent,
+  fail-closed, and non-throwing for an id that does not exist, because the ids reach it from
+  an anonymous surface. `discoverability` gains the same batched twin, `are_public()`, and
+  `is_public()` now delegates to it so the two can never disagree. Both cost four statements
+  for any number of ids, measured by a test comparing 200 against 2.
+- **`access::filter_courses_public()`**, the one predicate the anonymous surface may use: it
+  keeps a course when `discoverability::are_public()` says so, preserves the caller's keys,
+  and consults no viewer at all - the same answer for a visitor, an administrator and a
+  crawler.
+- **`access::prime_relationships()`**, a request-scoped primer for the relationship memo. A
+  caller that has already read the viewer's `{user_enrolments}` in one statement hands the
+  course ids over, and `filter_courses()` stops probing the enrolment tables one course at a
+  time - the only part of a listing that was not flat, measured at 105 probed courses for 113
+  statements. It writes **only** true, because the caller is vouching for a relationship it
+  read and is not authoritative about the absence of one; it is keyed by the viewer, and
+  `reset_caches()` drops it.
+- **The editing page offers the third option**, gated on the new capability, and freezes the
+  control persistently when the category is already public and the editor may not publish - so
+  the value still submits and an unrelated save never un-publishes a category. Its preview
+  panel gains a public branch: what a visitor is served, plus a warning when an unlisted
+  ancestor or a hidden category on the path makes the public state inert. The privacy provider
+  labels the new state, and the Behat generator step accepts `"public"`.
+
 - **Course categories have a discoverability state of their own: listed or unlisted.** Stored
   in a second table, `local_unlistedcourses_catstate`, a row only for an unlisted category;
   read through `\local_unlistedcourses\category_discoverability` (`get_states()`,

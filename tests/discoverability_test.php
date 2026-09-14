@@ -316,19 +316,28 @@ final class discoverability_test extends \advanced_testcase {
         discoverability::set_state((int) $course->id, discoverability::STATE_PUBLIC);
         $this->assertTrue(discoverability::is_public((int) $course->id), 'Precondition: visible everywhere.');
 
+        /* The answer is memoised for the request, so a visibility flag written straight to
+           the table - which is not a route this plugin owns - is followed only after the
+           memo is dropped. Every pair below therefore resets before it re-reads. */
         $DB->set_field('course', 'visible', 0, ['id' => $course->id]);
+        discoverability::reset_caches();
         $this->assertFalse(discoverability::is_public((int) $course->id), 'A hidden course is never public.');
         $DB->set_field('course', 'visible', 1, ['id' => $course->id]);
+        discoverability::reset_caches();
         $this->assertTrue(discoverability::is_public((int) $course->id));
 
         $DB->set_field('course_categories', 'visible', 0, ['id' => $child->id]);
+        discoverability::reset_caches();
         $this->assertFalse(discoverability::is_public((int) $course->id), 'A hidden category is never public.');
         $DB->set_field('course_categories', 'visible', 1, ['id' => $child->id]);
+        discoverability::reset_caches();
         $this->assertTrue(discoverability::is_public((int) $course->id));
 
         $DB->set_field('course_categories', 'visible', 0, ['id' => $parent->id]);
+        discoverability::reset_caches();
         $this->assertFalse(discoverability::is_public((int) $course->id), 'A hidden ancestor is never public.');
         $DB->set_field('course_categories', 'visible', 1, ['id' => $parent->id]);
+        discoverability::reset_caches();
         $this->assertTrue(discoverability::is_public((int) $course->id));
 
         // Control: a listed and an unlisted course are never public, however visible.
@@ -421,5 +430,164 @@ final class discoverability_test extends \advanced_testcase {
             $DB->record_exists(discoverability::TABLE, ['courseid' => $control->id]),
             'Control: another course\'s row must survive.'
         );
+    }
+
+    /**
+     * are_public() agrees with is_public() over every shape, and answers in the order asked.
+     *
+     * The six shapes are the whole composition: the state, the course's own
+     * visibility, the category's visibility, an ancestor's visibility, an
+     * unlisted category on the path, and a course that is not there at all.
+     *
+     * @return void
+     */
+    public function test_are_public_agrees_with_is_public_over_every_shape(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $parent = $generator->create_category();
+        $child = $generator->create_category(['parent' => $parent->id]);
+        $hiddencategory = $generator->create_category(['parent' => $parent->id, 'visible' => 0]);
+        $unlistedcategory = $generator->create_category(['parent' => $parent->id]);
+
+        $public = $generator->create_course(['category' => $child->id]);
+        $hidden = $generator->create_course(['category' => $child->id, 'visible' => 0]);
+        $inhidden = $generator->create_course(['category' => $hiddencategory->id]);
+        $inunlisted = $generator->create_course(['category' => $unlistedcategory->id]);
+        $unlisted = $generator->create_course(['category' => $child->id]);
+        $listed = $generator->create_course(['category' => $child->id]);
+
+        $this->setAdminUser();
+        foreach ([$public, $hidden, $inhidden, $inunlisted] as $course) {
+            discoverability::set_state((int) $course->id, discoverability::STATE_PUBLIC);
+        }
+        discoverability::set_state((int) $unlisted->id, discoverability::STATE_UNLISTED);
+        category_discoverability::set_state((int) $unlistedcategory->id, category_discoverability::STATE_UNLISTED);
+
+        $expected = [
+            (int) $public->id => true,
+            (int) $hidden->id => false,
+            (int) $inhidden->id => false,
+            (int) $inunlisted->id => false,
+            (int) $unlisted->id => false,
+            (int) $listed->id => false,
+            999999 => false,
+        ];
+
+        $this->setUser(0);
+        access::reset_caches();
+        $batch = discoverability::are_public(array_keys($expected));
+        $this->assertSame(array_keys($expected), array_keys($batch), 'The answers come back in the order asked.');
+        $this->assertSame($expected, $batch);
+
+        foreach ($expected as $courseid => $answer) {
+            access::reset_caches();
+            $this->assertSame(
+                $answer,
+                discoverability::is_public($courseid),
+                "One at a time and in a batch must agree for course {$courseid}."
+            );
+        }
+
+        // Control: a hidden ancestor withholds a course whose own category is visible.
+        $DB->set_field('course_categories', 'visible', 0, ['id' => $parent->id]);
+        access::reset_caches();
+        $this->assertSame(
+            [(int) $public->id => false],
+            discoverability::are_public([(int) $public->id]),
+            'A hidden ancestor is never public.'
+        );
+    }
+
+    /**
+     * are_public() over 200 courses costs what it costs over 2.
+     *
+     * THE LARGE SET IS SPREAD OVER TWENTY CATEGORIES, and the small one sits in
+     * one, on purpose. All 202 courses in a single category would read alike
+     * under an implementation that batched per distinct CATEGORY rather than
+     * per request, because there would be one distinct category either way, and
+     * the equality would then hold for a reason other than the one asserted.
+     * Twenty categories against one separates the two: a per-category
+     * implementation pays twenty path lookups on the large set and one on the
+     * small, and the assertion fails as it should.
+     *
+     * @return void
+     */
+    public function test_are_public_reads_the_same_for_two_courses_and_for_two_hundred(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $parent = $generator->create_category();
+        $category = $generator->create_category(['parent' => $parent->id]);
+
+        $small = $this->seed_public_courses((int) $category->id, 2);
+        $large = [];
+        for ($i = 0; $i < 20; $i++) {
+            $spread = $generator->create_category(['parent' => $parent->id]);
+            $large = array_merge($large, $this->seed_public_courses((int) $spread->id, 10));
+        }
+        $this->assertCount(200, $large, 'Precondition: the large set really holds two hundred courses.');
+        [$insql, $params] = $DB->get_in_or_equal($large, SQL_PARAMS_NAMED, 'crs');
+        $this->assertCount(
+            20,
+            array_unique($DB->get_fieldset_select('course', 'category', "id $insql", $params)),
+            'The large set must be spread over twenty distinct categories, not one.'
+        );
+
+        $this->setUser(0);
+        access::reset_caches();
+        $before = $DB->perf_get_reads();
+        $answers = discoverability::are_public($small);
+        $smallreads = $DB->perf_get_reads() - $before;
+        $this->assertSame([true, true], array_values($answers), 'Precondition: the small set really is public.');
+
+        access::reset_caches();
+        $before = $DB->perf_get_reads();
+        $answers = discoverability::are_public($large);
+        $largereads = $DB->perf_get_reads() - $before;
+        $this->assertSame(array_fill(0, 200, true), array_values($answers));
+
+        $this->assertSame($smallreads, $largereads, 'The predicate must cost the same for 200 courses as for 2.');
+    }
+
+    /**
+     * Public, visible course rows in a category, written straight to the tables.
+     *
+     * The generator builds a whole course per call - context, sections, enrolment
+     * instances, gradebook - which costs minutes at this size and none of which
+     * this predicate reads: it reads id, category and visible, and the state row.
+     *
+     * @param int $categoryid The category the courses sit in.
+     * @param int $count How many to create.
+     * @return array The course ids.
+     */
+    private function seed_public_courses(int $categoryid, int $count): array {
+        global $DB;
+
+        $ids = [];
+        $rows = [];
+        for ($i = 0; $i < $count; $i++) {
+            $ids[] = (int) $DB->insert_record('course', (object) [
+                'category' => $categoryid,
+                'fullname' => 'Budget course ' . $categoryid . '-' . $i,
+                'shortname' => 'bc' . $categoryid . '-' . $i,
+                'visible' => 1,
+                'timecreated' => time(),
+                'timemodified' => time(),
+            ]);
+        }
+        foreach ($ids as $courseid) {
+            $rows[] = (object) [
+                'courseid' => $courseid,
+                'state' => discoverability::STATE_PUBLIC,
+                'usermodified' => 0,
+                'timemodified' => time(),
+            ];
+        }
+        $DB->insert_records(discoverability::TABLE, $rows);
+        return $ids;
     }
 }

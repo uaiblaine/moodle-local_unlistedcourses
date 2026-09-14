@@ -6,15 +6,17 @@ for this plugin.
 
 A **local plugin** that owns one decision per course: who may learn that it exists —
 listed, unlisted, or public (served to visitors who are not logged in, under
-`forcelogin = 1`) — and the same decision per course category, listed or unlisted. Two
+`forcelogin = 1`) — and **the same three states per course category**. Two
 tables (`local_unlistedcourses_state`, `local_unlistedcourses_catstate`, a row only for
-non-default states), two capabilities (`local/unlistedcourses:publish`,
-`local/unlistedcourses:managecategorystate`), two events, no settings, one page
+non-default states), **three capabilities** (`local/unlistedcourses:publish`,
+`local/unlistedcourses:managecategorystate`, `local/unlistedcourses:publishcategory`), two
+events, no settings, one page
 (`category.php`, the category's editing surface, with one template for its preview). **The
 component name is narrower than its scope** — it was born as "unlisted courses" and now
 owns "public" and categories too; renaming a component means uninstall + reinstall, so the
 name stays and the strings talk about discoverability. The design record of the category
-work is `docs/discoverability/README.md`, section 14. Moodle **5.2 only**
+work is `docs/discoverability/README.md`, sections 14 (unlisted categories) and 15
+(public categories). Moodle **5.2 only**
 (`$plugin->supported = [502, 502]`); one CI job in `.github/workflows/ci.yml` — update it
 when the range changes. Mounted on m502 at `local/unlistedcourses`. The implementation
 brief for the public-page work, with the measured facts it rests on, is
@@ -62,6 +64,35 @@ without `model` while the reviewers around them were correctly downgraded.
 
 ## Architecture gotchas
 
+- **`is_public()` and `are_public()` live on the STATE classes, never on `access` or
+  `category_access`.** Everything in those two predicates is an answer about a viewer — a
+  cohort membership, a role assignment, a capability — and "public" is a property of the
+  thing, composed from the stored state and from rows of the course and category tables with
+  no capability involved (`accesslib.php:475-477` hard-denies every capability for user id 0
+  under `forcelogin`). Putting the anonymous answer beside the per-viewer one invites a
+  viewer term into an answer that must not have one. `access::filter_courses_public()` is the
+  single exception and proves the rule: a listing filter that asks the state class and reads
+  no `$USER` at all — it is the ONLY predicate the anonymous shell may use.
+- **A category has three states too, and the second capability is what makes the third one
+  safe.** `category_discoverability::set_state()` checks `CAPABILITY_MANAGE` on every real
+  transition AND `CAPABILITY_PUBLISH` on every transition that enters or leaves PUBLIC, in
+  that order. A category is effectively public when its own state says so, it is visible,
+  every ancestor exists and is visible, and no ancestor is unlisted — ancestors need NOT be
+  public (D15). The most-specific rule decides the rest: an UNLISTED course inside a PUBLIC
+  category is never public, and neither is an UNLISTED subcategory.
+- **`are_public()` is four statements for any N, and `is_public()` delegates to it** on both
+  classes, so the two can never disagree. It is memoised per id for the request with NO
+  viewer in the key, and it is **non-throwing**: the ids reach it from an anonymous surface,
+  so a missing course or category is an answer (false) and never an exception — every read
+  is a plain one, no `MUST_EXIST` anywhere. Because it is memoised, a test that writes
+  `visible` straight to a table must reset the caches before it re-reads.
+- **`access::prime_relationships()` only ever writes TRUE.** A caller that has read the
+  viewer's whole `{user_enrolments}` in one statement hands the course ids over and
+  `has_course_relationship()` answers from memory — which is the one part of
+  `filter_courses()` that is not flat (measured: 105 probed courses, 113 statements). The
+  caller is vouching for a relationship it read; it is NOT authoritative about the absence of
+  one, because being staff of a course is a relationship too and no enrolment table carries
+  it. Viewer-keyed, dropped by `reset_caches()`.
 - **The capability check lives in `discoverability::set_state()` and nowhere else.** The
   course form is one of four writers — the web service and `tool_uploadcourse` dispatch the
   same `after_form_submission` hook (from `create_course()` / `update_course()`, before the
@@ -147,7 +178,7 @@ without `model` while the reviewers around them were correctly downgraded.
   course too; a manager role there would also grant publish and void the clamp test.
 - **`enrol_apply` is absent from a fresh test site's `enrol_plugins_enabled`** —
   `add_apply_enrol()` in `access_test` enables it first.
-- **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds forty-nine
+- **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds fifty-five
   guards, and each must redden a test. Adding a guard without a mutation is how untested
   ones get in. The first sweep found one that reddened nothing — the restore clamp above —
   and it turned out to be wrong code, not a missing test.
@@ -197,6 +228,12 @@ without `model` while the reviewers around them were correctly downgraded.
   the category, gated on nothing, because "is anybody left" must not depend on who is reading.
   Names go into a double stash in the plain spelling. The visible-to-N count intersects the
   eligible set of every unlisted ancestor, as the predicate ANDs them.
+- **The mustache lint sees ONE branch of `category_preview.mustache`.** It renders a
+  template against the single `Example context (json)` block in its docblock and
+  validates the HTML that comes out; `public` and its inverse are mutually exclusive, so
+  whichever context the block carries, the other branch's markup is never parsed by the
+  gate. The block carries the unlisted branch; `category_preview_test` renders the public
+  one and asserts the fragment parses, which is what stands in for the lint there.
 - **There is no backup or restore of a category's state.** Moodle has no category backup a
   plugin could attach to; the row follows the category through core's
   `pre_course_category_delete` and `pre_course_category_delete_move` callbacks in `lib.php`.

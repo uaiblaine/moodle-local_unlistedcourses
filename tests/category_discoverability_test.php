@@ -392,4 +392,407 @@ final class category_discoverability_test extends \advanced_testcase {
         $this->assertTrue($DB->record_exists(category_discoverability::TABLE, ['categoryid' => $target->id]));
         $this->assertSame([(int) $target->id], category_discoverability::unlisted_ids());
     }
+
+    /**
+     * A user holding the manage capability at the category and nothing else.
+     *
+     * The control for every publish refusal: somebody who may change the state
+     * but may not take it into or out of the public one.
+     *
+     * @param \core_course_category $category The category.
+     * @return \stdClass The user.
+     */
+    private function create_statemanager(\core_course_category $category): \stdClass {
+        $user = $this->getDataGenerator()->create_user();
+        $context = \core\context\coursecat::instance($category->id);
+        $roleid = $this->getDataGenerator()->create_role();
+        assign_capability(category_discoverability::CAPABILITY_MANAGE, CAP_ALLOW, $roleid, $context->id, true);
+        role_assign($roleid, $user->id, $context->id);
+        return $user;
+    }
+
+    /**
+     * Put a category in a state as the site administrator, with the caches reset behind it.
+     *
+     * @param int $categoryid The category id.
+     * @param int $state One of the state constants.
+     * @return void
+     */
+    private function set_state_as_admin(int $categoryid, int $state): void {
+        $current = $GLOBALS['USER'];
+        $this->setAdminUser();
+        category_discoverability::set_state($categoryid, $state);
+        $this->setUser($current);
+        category_discoverability::reset_caches();
+    }
+
+    /**
+     * There are three states, and public_ids() names the categories in the third one.
+     *
+     * @return void
+     */
+    public function test_states_has_three_values_and_public_ids_names_the_public_categories(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $this->setAdminUser();
+
+        $this->assertSame(
+            [
+                category_discoverability::STATE_DEFAULT,
+                category_discoverability::STATE_UNLISTED,
+                category_discoverability::STATE_PUBLIC,
+            ],
+            category_discoverability::states()
+        );
+
+        $first = $generator->create_category();
+        $second = $generator->create_category();
+        $unlisted = $generator->create_category();
+        $this->assertSame([], category_discoverability::public_ids(), 'Control: nothing is public yet.');
+
+        category_discoverability::set_state((int) $second->id, category_discoverability::STATE_PUBLIC);
+        category_discoverability::set_state((int) $first->id, category_discoverability::STATE_PUBLIC);
+        category_discoverability::set_state((int) $unlisted->id, category_discoverability::STATE_UNLISTED);
+
+        $this->assertSame([(int) $first->id, (int) $second->id], category_discoverability::public_ids());
+        $this->assertNotContains((int) $unlisted->id, category_discoverability::public_ids());
+        $this->assertSame([(int) $unlisted->id], category_discoverability::unlisted_ids());
+
+        // The write resets the memo: the same request sees the new answer.
+        category_discoverability::set_state((int) $first->id, category_discoverability::STATE_DEFAULT);
+        $this->assertSame([(int) $second->id], category_discoverability::public_ids());
+    }
+
+    /**
+     * Entering the public state needs the publish capability, over and above the manage one.
+     *
+     * @return void
+     */
+    public function test_entering_the_public_state_needs_the_publish_capability(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $category = $generator->create_category();
+        $statemanager = $this->create_statemanager($category);
+        $manager = $this->create_manager($category);
+
+        // The manage capability alone unlists the category: the control that the gate is reached at all.
+        $this->setUser($statemanager);
+        category_discoverability::set_state((int) $category->id, category_discoverability::STATE_UNLISTED);
+        $this->assertSame(
+            category_discoverability::STATE_UNLISTED,
+            category_discoverability::get_state((int) $category->id)
+        );
+
+        $refused = false;
+        try {
+            category_discoverability::set_state((int) $category->id, category_discoverability::STATE_PUBLIC);
+        } catch (\required_capability_exception $e) {
+            $refused = true;
+            $this->assertSame(get_capability_string(category_discoverability::CAPABILITY_PUBLISH), $e->a);
+        }
+        $this->assertTrue($refused, 'The manage capability alone must not publish a category.');
+        $this->assertSame(
+            category_discoverability::STATE_UNLISTED,
+            category_discoverability::get_state((int) $category->id),
+            'The refused change must not land.'
+        );
+
+        // Control: a manager, who holds both capabilities, makes the very same call.
+        $this->setUser($manager);
+        category_discoverability::set_state((int) $category->id, category_discoverability::STATE_PUBLIC);
+        $this->assertSame(
+            category_discoverability::STATE_PUBLIC,
+            category_discoverability::get_state((int) $category->id)
+        );
+    }
+
+    /**
+     * Leaving the public state needs the publish capability too: publishing reversed.
+     *
+     * @return void
+     */
+    public function test_leaving_the_public_state_needs_the_publish_capability(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $category = $generator->create_category();
+        $statemanager = $this->create_statemanager($category);
+        $manager = $this->create_manager($category);
+
+        $this->setUser($manager);
+        category_discoverability::set_state((int) $category->id, category_discoverability::STATE_PUBLIC);
+
+        $this->setUser($statemanager);
+        foreach ([category_discoverability::STATE_UNLISTED, category_discoverability::STATE_DEFAULT] as $target) {
+            $refused = false;
+            try {
+                category_discoverability::set_state((int) $category->id, $target);
+            } catch (\required_capability_exception $e) {
+                $refused = true;
+            }
+            $this->assertTrue($refused, "The manage capability alone must not move a public category to {$target}.");
+            $this->assertSame(
+                category_discoverability::STATE_PUBLIC,
+                category_discoverability::get_state((int) $category->id)
+            );
+        }
+
+        // Control: the manager may un-publish it.
+        $this->setUser($manager);
+        category_discoverability::set_state((int) $category->id, category_discoverability::STATE_UNLISTED);
+        $this->assertSame(
+            category_discoverability::STATE_UNLISTED,
+            category_discoverability::get_state((int) $category->id)
+        );
+    }
+
+    /**
+     * Re-submitting "public" changes nothing, needs no capability and fires no event.
+     *
+     * This is what lets an editor who may not publish save the form of a public
+     * category without un-publishing it and without being refused.
+     *
+     * @return void
+     */
+    public function test_a_public_to_public_save_needs_no_capability_and_fires_no_event(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $category = $generator->create_category();
+        $statemanager = $this->create_statemanager($category);
+        $manager = $this->create_manager($category);
+        $ours = static fn(\core\event\base $event): bool => $event instanceof category_state_updated;
+
+        $this->setUser($manager);
+        category_discoverability::set_state((int) $category->id, category_discoverability::STATE_PUBLIC);
+
+        $this->setUser($statemanager);
+        $sink = $this->redirectEvents();
+        category_discoverability::set_state((int) $category->id, category_discoverability::STATE_PUBLIC);
+        $this->assertCount(0, array_filter($sink->get_events(), $ours));
+        $this->assertSame(
+            category_discoverability::STATE_PUBLIC,
+            category_discoverability::get_state((int) $category->id)
+        );
+
+        // Control: the same user CHANGING the state is refused, and the state stays put.
+        $refused = false;
+        try {
+            category_discoverability::set_state((int) $category->id, category_discoverability::STATE_DEFAULT);
+        } catch (\required_capability_exception $e) {
+            $refused = true;
+        }
+        $sink->close();
+        $this->assertTrue($refused);
+        $this->assertSame(
+            category_discoverability::STATE_PUBLIC,
+            category_discoverability::get_state((int) $category->id)
+        );
+    }
+
+    /**
+     * A public category under a listed, visible parent is public; the six ways it stops being.
+     *
+     * Viewer-independent throughout: the assertions run with nobody logged in,
+     * which is the surface the predicate exists for.
+     *
+     * @return void
+     */
+    public function test_is_public_composes_own_state_own_visibility_and_the_whole_path(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $parent = $generator->create_category();
+        $leaf = $generator->create_category(['parent' => $parent->id]);
+        $this->set_state_as_admin((int) $leaf->id, category_discoverability::STATE_PUBLIC);
+
+        $this->setUser(0);
+        $this->assertTrue(
+            category_discoverability::is_public((int) $leaf->id),
+            'Precondition: a public leaf under a listed visible parent is public.'
+        );
+
+        // An UNLISTED ancestor refuses it: an anonymous visitor can satisfy no term of that rule.
+        $this->set_state_as_admin((int) $parent->id, category_discoverability::STATE_UNLISTED);
+        $this->assertFalse(category_discoverability::is_public((int) $leaf->id));
+        $this->set_state_as_admin((int) $parent->id, category_discoverability::STATE_DEFAULT);
+        $this->assertTrue(category_discoverability::is_public((int) $leaf->id));
+
+        // A HIDDEN ancestor refuses it.
+        $DB->set_field('course_categories', 'visible', 0, ['id' => $parent->id]);
+        category_discoverability::reset_caches();
+        $this->assertFalse(category_discoverability::is_public((int) $leaf->id));
+        $DB->set_field('course_categories', 'visible', 1, ['id' => $parent->id]);
+        category_discoverability::reset_caches();
+        $this->assertTrue(category_discoverability::is_public((int) $leaf->id));
+
+        // Its own row hidden refuses it.
+        $DB->set_field('course_categories', 'visible', 0, ['id' => $leaf->id]);
+        category_discoverability::reset_caches();
+        $this->assertFalse(category_discoverability::is_public((int) $leaf->id));
+        $DB->set_field('course_categories', 'visible', 1, ['id' => $leaf->id]);
+        category_discoverability::reset_caches();
+        $this->assertTrue(category_discoverability::is_public((int) $leaf->id));
+
+        // Its own state, unlisted and then listed, refuses it in both cases.
+        $this->set_state_as_admin((int) $leaf->id, category_discoverability::STATE_UNLISTED);
+        $this->assertFalse(category_discoverability::is_public((int) $leaf->id));
+        $this->set_state_as_admin((int) $leaf->id, category_discoverability::STATE_DEFAULT);
+        $this->assertFalse(category_discoverability::is_public((int) $leaf->id));
+    }
+
+    /**
+     * A category id that does not exist answers false, and throws nothing.
+     *
+     * Two shapes: an id with no row at all, and a state row whose category has
+     * vanished - the second is the one a MUST_EXIST read would throw on.
+     *
+     * @return void
+     */
+    public function test_a_missing_category_answers_false_without_throwing(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $control = $generator->create_category();
+        $this->set_state_as_admin((int) $control->id, category_discoverability::STATE_PUBLIC);
+
+        $DB->insert_record(category_discoverability::TABLE, (object) [
+            'categoryid' => 999999,
+            'state' => category_discoverability::STATE_PUBLIC,
+            'usermodified' => 0,
+            'timemodified' => time(),
+        ]);
+        category_discoverability::reset_caches();
+
+        $this->setUser(0);
+        $this->assertFalse(category_discoverability::is_public(999999));
+        $this->assertFalse(category_discoverability::is_public(888888));
+        $this->assertSame(
+            [999999 => false, 888888 => false, (int) $control->id => true],
+            category_discoverability::are_public([999999, 888888, (int) $control->id]),
+            'Control: a real public category answers the other way in the very same call.'
+        );
+    }
+
+    /**
+     * are_public() agrees with is_public() and answers in the order asked.
+     *
+     * @return void
+     */
+    public function test_are_public_agrees_with_is_public_and_keeps_the_order_given(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $parent = $generator->create_category();
+        $public = $generator->create_category(['parent' => $parent->id]);
+        $unlisted = $generator->create_category(['parent' => $parent->id]);
+        $listed = $generator->create_category(['parent' => $parent->id]);
+        $inside = $generator->create_category(['parent' => $unlisted->id]);
+        $this->set_state_as_admin((int) $public->id, category_discoverability::STATE_PUBLIC);
+        $this->set_state_as_admin((int) $unlisted->id, category_discoverability::STATE_UNLISTED);
+        $this->set_state_as_admin((int) $inside->id, category_discoverability::STATE_PUBLIC);
+
+        $ids = [(int) $inside->id, (int) $public->id, (int) $listed->id, (int) $unlisted->id];
+        $batch = category_discoverability::are_public($ids);
+        $this->assertSame($ids, array_keys($batch), 'The answers must come back in the order asked.');
+        $this->assertSame(
+            [(int) $inside->id => false, (int) $public->id => true, (int) $listed->id => false, (int) $unlisted->id => false],
+            $batch
+        );
+
+        foreach ($ids as $categoryid) {
+            category_discoverability::reset_caches();
+            $this->assertSame(
+                $batch[$categoryid],
+                category_discoverability::is_public($categoryid),
+                "One at a time and in a batch must agree for category {$categoryid}."
+            );
+        }
+    }
+
+    /**
+     * are_public() over 200 categories costs what it costs over 2.
+     *
+     * The two calls run the same code over the same shape of data and differ
+     * only in how many ids are asked about, so anything per category - a row
+     * read, a path walk, a visibility lookup - is the only thing that could
+     * make the larger set read more than the smaller one.
+     *
+     * THE LARGE SET IS SPREAD OVER TWENTY PARENTS, and the small one sits under
+     * a single parent, on purpose. With every candidate under one shared parent
+     * the two calls would also read alike under an implementation that batched
+     * per DISTINCT ANCESTOR rather than per request, because there would be one
+     * distinct ancestor either way - the equality would hold for a reason that
+     * is not the one being asserted. Twenty parents against one makes the two
+     * explanations disagree: a per-ancestor implementation reads twenty path
+     * lookups here and one there, and the assertion fails as it should.
+     *
+     * @return void
+     */
+    public function test_are_public_reads_the_same_for_two_categories_and_for_two_hundred(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $parent = $generator->create_category();
+
+        $small = [];
+        for ($i = 0; $i < 2; $i++) {
+            $small[] = (int) $generator->create_category(['parent' => $parent->id])->id;
+        }
+        $parents = [];
+        for ($i = 0; $i < 20; $i++) {
+            $parents[] = (int) $generator->create_category()->id;
+        }
+        $large = [];
+        for ($i = 0; $i < 200; $i++) {
+            $large[] = (int) $generator->create_category(['parent' => $parents[$i % 20]])->id;
+        }
+
+        /* The state rows are written straight to the table rather than through set_state():
+           the budget is what is being measured, and 202 gated writes with their events cost
+           minutes and prove nothing about the read path. */
+        $rows = [];
+        foreach (array_merge($small, $large) as $categoryid) {
+            $rows[] = (object) [
+                'categoryid' => $categoryid,
+                'state' => category_discoverability::STATE_PUBLIC,
+                'usermodified' => 0,
+                'timemodified' => time(),
+            ];
+        }
+        $DB->insert_records(category_discoverability::TABLE, $rows);
+
+        /* Precondition: the two sets really do differ in how many distinct ancestors they
+           carry, which is the whole reason the equality below means what it says. */
+        [$insql, $params] = $DB->get_in_or_equal($large, SQL_PARAMS_NAMED, 'cat');
+        $this->assertCount(
+            20,
+            array_unique($DB->get_fieldset_select('course_categories', 'parent', "id $insql", $params)),
+            'The large set must sit under twenty distinct parents, not one.'
+        );
+
+        $this->setUser(0);
+        category_discoverability::reset_caches();
+        $before = $DB->perf_get_reads();
+        $answers = category_discoverability::are_public($small);
+        $smallreads = $DB->perf_get_reads() - $before;
+        $this->assertSame([true, true], array_values($answers), 'Precondition: the small set really is public.');
+
+        category_discoverability::reset_caches();
+        $before = $DB->perf_get_reads();
+        $answers = category_discoverability::are_public($large);
+        $largereads = $DB->perf_get_reads() - $before;
+        $this->assertSame(array_fill(0, 200, true), array_values($answers));
+
+        $this->assertSame(
+            $smallreads,
+            $largereads,
+            'The predicate must cost the same for 200 categories as for 2.'
+        );
+    }
 }

@@ -73,5 +73,14 @@ function xmldb_local_unlistedcourses_upgrade($oldversion) {
         upgrade_plugin_savepoint(true, 2026090600, 'local', 'unlistedcourses');
     }
 
+    if ($oldversion < 2026091300) {
+        /* Course categories gain a third state, public, and a capability of their own to
+           enter and leave it. Nothing to migrate and no schema change: the state column
+           already holds the value, a category without a row is still listed, and the
+           capability installs itself from db/access.php. The rung exists so the savepoint
+           follows the version, and so this release is visible in the upgrade log. */
+        upgrade_plugin_savepoint(true, 2026091300, 'local', 'unlistedcourses');
+    }
+
     return true;
 }

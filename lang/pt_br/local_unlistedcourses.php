@@ -29,6 +29,7 @@ $string['categorystate_help'] = 'Quem pode saber que esta categoria existe.
 
 * **Listada**: a categoria e seus cursos aparecem nas listagens como qualquer outra.
 * **Não listada**: a categoria só é nomeada a quem é membro de uma coorte definida nesta categoria, a quem tem um papel nesta categoria ou em uma categoria acima dela, e à equipe (gerentes e criadores de curso). Todas as demais pessoas deixam de ver a categoria, suas subcategorias e seus cursos no índice de cursos, na página inicial e nos resultados de busca; um curso dentro dela continua nas listagens de quem já está inscrito nele, tem uma candidatura aguardando decisão ou o leciona. Um curso público dentro de uma categoria não listada deixa de ser público.
+* **Pública**: além de listada, a página da categoria pode ser lida por visitantes não autenticados. Dentro dela, só os cursos cujo próprio estado é Público são servidos a eles: um curso não listado continua oculto, e um curso listado não é oferecido a um visitante. Só um usuário autorizado a publicar categorias pode marcar ou desmarcar isto. Uma categoria oculta, uma categoria dentro de uma categoria oculta e uma categoria dentro de uma categoria não listada nunca são públicas, diga o que disser esta opção.
 
 Isto é uma regra de listagem, não uma permissão. Esconde a categoria das páginas que este site renderiza; serviços web, o aplicativo móvel, o bloco de Navegação e os menus inteligentes de lista de cursos continuam nomeando-a, e um link direto para um curso continua seguindo as regras do próprio curso. Coortes criadas no nível do site não contam, e a coorte à qual um método de inscrição restringe as inscrições também não: só uma coorte definida nesta categoria, ou um papel atribuído aqui, abre a categoria.';
 $string['categorystate_saved'] = 'Descobribilidade da categoria salva';
@@ -43,13 +44,17 @@ $string['preview_cohortsnone'] = 'Nenhuma coorte está definida nesta categoria.
 $string['preview_cohortsnoview'] = 'Você não pode ver as coortes desta categoria.';
 $string['preview_heading'] = 'Quem vê esta categoria enquanto ela está não listada';
 $string['preview_managecohorts'] = 'Gerenciar as coortes desta categoria';
+$string['preview_public'] = 'Esta categoria é pública: a página dela pode ser lida por visitantes não autenticados. Dentro dela, só os cursos cujo próprio estado é Público são servidos a eles; um curso não listado e uma subcategoria não listada continuam ocultos, e um curso listado não é oferecido a um visitante.';
+$string['preview_publicancestor'] = 'Uma categoria acima desta está não listada, então esta categoria não é pública de fato: um visitante não autenticado não satisfaz nenhum dos critérios que abrem uma categoria não listada, e essa regra vale para tudo abaixo dela.';
+$string['preview_publicheading'] = 'O que os visitantes veem desta categoria pública';
+$string['preview_publichidden'] = 'Esta categoria, ou uma categoria acima dela, está oculta. Uma categoria oculta nunca é pública, diga o que disser esta opção.';
 $string['preview_roleholders'] = '{$a} pessoas têm um papel nesta categoria ou em uma categoria acima dela.';
 $string['preview_theme'] = 'Temas por categoria estão habilitados neste site (allowcategorythemes). Um tema definido nesta categoria tiraria as páginas dela do tema que a oculta.';
 $string['preview_visible'] = 'Além da equipe, esta categoria está visível no momento para {$a} pessoas.';
 $string['preview_visiblenone'] = 'Não listada e visível para ninguém além da equipe: nenhum membro de coorte e nenhum detentor de papel. Todos os demais usuários deixarão de ver esta categoria e seus cursos.';
 $string['privacy:metadata:local_unlistedcourses_catstate'] = 'O estado de descobribilidade de cada categoria de curso que não está no estado padrão, e quem o alterou por último.';
 $string['privacy:metadata:local_unlistedcourses_catstate:categoryid'] = 'A categoria de curso à qual o estado pertence.';
-$string['privacy:metadata:local_unlistedcourses_catstate:state'] = 'O estado: listada ou não listada.';
+$string['privacy:metadata:local_unlistedcourses_catstate:state'] = 'O estado: listada, não listada ou pública.';
 $string['privacy:metadata:local_unlistedcourses_catstate:timemodified'] = 'Quando o estado foi alterado pela última vez.';
 $string['privacy:metadata:local_unlistedcourses_catstate:usermodified'] = 'O usuário que alterou o estado pela última vez.';
 $string['privacy:metadata:local_unlistedcourses_state'] = 'O estado de descobribilidade de cada curso que não está no estado padrão, e quem o alterou por último.';
@@ -68,5 +73,6 @@ $string['state_help'] = 'Quem pode saber que este curso existe.
 * **Público**: além de listado, a página de apresentação do curso pode ser lida por visitantes não autenticados, de modo que um link compartilhado mostra uma prévia em aplicativos de mensagem e redes sociais. Só um usuário autorizado a publicar cursos pode marcar ou desmarcar isto. Um curso oculto, ou dentro de uma categoria oculta, nunca é público, diga o que disser esta opção. Se o curso não tem página de apresentação configurada, esta opção não produz efeito visível até que tenha.';
 $string['state_public'] = 'Público';
 $string['state_unlisted'] = 'Não listado';
-$string['unlistedcourses:managecategorystate'] = 'Definir se uma categoria de curso é listada ou não listada';
+$string['unlistedcourses:managecategorystate'] = 'Alterar o estado de descobribilidade de uma categoria de curso';
 $string['unlistedcourses:publish'] = 'Publicar um curso para visitantes não autenticados';
+$string['unlistedcourses:publishcategory'] = 'Publicar uma categoria de curso para visitantes não autenticados';

@@ -254,9 +254,13 @@ class provider implements
      * @return string The localised label.
      */
     private static function category_state_label(int $state): string {
-        if ($state === category_discoverability::STATE_UNLISTED) {
-            return get_string('state_unlisted', 'local_unlistedcourses');
+        switch ($state) {
+            case category_discoverability::STATE_UNLISTED:
+                return get_string('state_unlisted', 'local_unlistedcourses');
+            case category_discoverability::STATE_PUBLIC:
+                return get_string('state_public', 'local_unlistedcourses');
+            default:
+                return get_string('state_default', 'local_unlistedcourses');
         }
-        return get_string('state_default', 'local_unlistedcourses');
     }
 }

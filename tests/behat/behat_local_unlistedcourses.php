@@ -45,18 +45,20 @@ class behat_local_unlistedcourses extends behat_base {
     /**
      * Set the discoverability state of a category identified by its idnumber.
      *
-     * @Given /^the category "(?P<idnumber>(?:[^"]|\\")*)" is "(?P<state>listed|unlisted)" for discoverability$/
+     * @Given /^the category "(?P<idnumber>(?:[^"]|\\")*)" is "(?P<state>listed|unlisted|public)" for discoverability$/
      * @param string $idnumber The category's idnumber.
-     * @param string $state Either "listed" or "unlisted".
+     * @param string $state Either "listed", "unlisted" or "public".
      * @return void
      */
     public function the_category_is_for_discoverability(string $idnumber, string $state): void {
         global $DB;
 
         $categoryid = (int) $DB->get_field('course_categories', 'id', ['idnumber' => $idnumber], MUST_EXIST);
-        $value = $state === 'unlisted'
-            ? \local_unlistedcourses\category_discoverability::STATE_UNLISTED
-            : \local_unlistedcourses\category_discoverability::STATE_DEFAULT;
+        $value = match ($state) {
+            'unlisted' => \local_unlistedcourses\category_discoverability::STATE_UNLISTED,
+            'public' => \local_unlistedcourses\category_discoverability::STATE_PUBLIC,
+            default => \local_unlistedcourses\category_discoverability::STATE_DEFAULT,
+        };
         \local_unlistedcourses\category_discoverability::set_state($categoryid, $value, (int) get_admin()->id);
     }
 }

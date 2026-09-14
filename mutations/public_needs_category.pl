@@ -1,3 +1,3 @@
-# Drop the category visibility half of is_public(): a course inside a hidden
+# Drop the category visibility half of the public predicate: a course inside a hidden
 # category then serves anonymously.
-s/return \$visiblecount === count\(\$ids\);/return true;/;
+s/if \(empty\(\$visible\[\$pathid\]\) \|\| !\$visible\[\$pathid\]->visible\) \{/if (false) {/;

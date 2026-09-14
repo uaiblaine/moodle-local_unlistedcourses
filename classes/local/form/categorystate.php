@@ -34,10 +34,15 @@ require_once($CFG->libdir . '/formslib.php');
 /**
  * The discoverability state of one course category, plus the preview beside it.
  *
- * Two options and nothing else: a category has no public state, because nothing
- * serves a category page to a visitor who is not logged in. The strings are the
- * course side's own - a listed category and a listed course mean the same thing
- * to a reader, and two vocabularies for one idea would be worse than a shared one.
+ * Three options, and the third one is offered on a capability of its own: only
+ * somebody holding local/unlistedcourses:publishcategory may take a category
+ * into or out of the public state, so anybody else is shown the two they may
+ * set. A category that is ALREADY public shows its value frozen, and frozen
+ * persistently - the value still submits - so that saving this form never
+ * un-publishes a category by omission, and never fails over a value the editor
+ * did not touch. The strings are the course side's own: a listed category and a
+ * listed course mean the same thing to a reader, and two vocabularies for one
+ * idea would be worse than a shared one.
  *
  * NONE OF THIS IS A SECURITY BOUNDARY. The boundary is
  * {@see category_discoverability::set_state()}, which checks the manage
@@ -70,14 +75,28 @@ class categorystate extends \moodleform {
         $mform->addElement('hidden', 'id', $id);
         $mform->setType('id', PARAM_INT);
 
+        $current = category_discoverability::get_state($id);
+        $canpublish = has_capability(category_discoverability::CAPABILITY_PUBLISH, $context);
+
         $options = [
             category_discoverability::STATE_DEFAULT => get_string('state_default', 'local_unlistedcourses'),
             category_discoverability::STATE_UNLISTED => get_string('state_unlisted', 'local_unlistedcourses'),
         ];
+        if ($canpublish || $current === category_discoverability::STATE_PUBLIC) {
+            $options[category_discoverability::STATE_PUBLIC] = get_string('state_public', 'local_unlistedcourses');
+        }
         $mform->addElement('select', 'state', get_string('categorystate', 'local_unlistedcourses'), $options);
         $mform->setType('state', PARAM_INT);
-        $mform->setDefault('state', category_discoverability::get_state($id));
+        $mform->setDefault('state', $current);
         $mform->addHelpButton('state', 'categorystate', 'local_unlistedcourses');
+
+        if ($current === category_discoverability::STATE_PUBLIC && !$canpublish) {
+            /* Persistent freeze: the value is displayed as text AND re-submitted through a
+               hidden input, so saving the form leaves the state exactly where it was. A
+               plain freeze would export the element's default instead. */
+            $mform->getElement('state')->setPersistantFreeze(true);
+            $mform->freeze('state');
+        }
 
         /* Trusted server-rendered HTML: a static element writes its content raw, and this
            content is a template of this plugin's own with every name already escaped for
