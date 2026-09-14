@@ -59,4 +59,26 @@ $capabilities = [
             'manager' => CAP_ALLOW,
         ],
     ],
+
+    /*
+     * Make a course category readable by visitors who are not logged in, on a
+     * site that forces login. Its own capability rather than the manage one
+     * above, for the reason the course side splits publish from update: hiding
+     * a category from listings is an editing act, publishing it to the open web
+     * is not, and folding the second into the first would grant the larger
+     * power through a rename. Manager only, and deliberately WITHOUT
+     * clonepermissionsfrom: no upgrade may back-fill this from
+     * managecategorystate or from anything else. RISK_SPAM because the
+     * published page carries author-written text to the open web; no
+     * RISK_PERSONAL, unlike the course capability, because a category page
+     * names courses and never participants.
+     */
+    'local/unlistedcourses:publishcategory' => [
+        'riskbitmask' => RISK_SPAM,
+        'captype' => 'write',
+        'contextlevel' => CONTEXT_COURSECAT,
+        'archetypes' => [
+            'manager' => CAP_ALLOW,
+        ],
+    ],
 ];

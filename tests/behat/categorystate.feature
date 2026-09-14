@@ -58,3 +58,13 @@ Feature: The discoverability page of a course category
     # the next step searches is really there for this user.
     Then "Category" "link" should exist in the ".secondary-navigation" "css_element"
     And "Discoverability" "link" should not exist in current page administration
+
+  Scenario: A manager publishes a category and is told what visitors will see
+    Given I am on the "CAT2" "Category" page logged in as "manager1"
+    And I navigate to "Discoverability" in current page administration
+    When I set the field "Discoverability" to "Public"
+    And I press "Save changes"
+    Then I should see "Category discoverability saved"
+    And the field "Discoverability" matches value "Public"
+    And I should see "What visitors see of this public category"
+    And I should see "This category is public"

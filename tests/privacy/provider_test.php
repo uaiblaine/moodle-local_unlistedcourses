@@ -364,4 +364,39 @@ final class provider_test extends provider_testcase {
             'The category row is untouched.'
         );
     }
+
+    /**
+     * A category last set to PUBLIC exports the "Public" label, not "Listed".
+     *
+     * @return void
+     */
+    public function test_a_public_category_state_exports_the_public_label(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $manager = $generator->create_user();
+        role_assign(
+            $DB->get_field('role', 'id', ['shortname' => 'manager']),
+            $manager->id,
+            \core\context\system::instance()->id
+        );
+
+        $public = $generator->create_category();
+        $unlisted = $generator->create_category();
+        $this->setUser($manager);
+        category_discoverability::set_state((int) $public->id, category_discoverability::STATE_PUBLIC);
+        category_discoverability::set_state((int) $unlisted->id, category_discoverability::STATE_UNLISTED);
+
+        $context = \core\context\coursecat::instance($public->id);
+        $this->export_context_data_for_user((int) $manager->id, $context, self::COMPONENT);
+        $data = writer::with_context($context)->get_data([get_string('pluginname', self::COMPONENT)]);
+        $this->assertSame(get_string('state_public', self::COMPONENT), $data->state);
+
+        // Control: the unlisted category of the same manager still exports its own label.
+        $other = \core\context\coursecat::instance($unlisted->id);
+        $this->export_context_data_for_user((int) $manager->id, $other, self::COMPONENT);
+        $data = writer::with_context($other)->get_data([get_string('pluginname', self::COMPONENT)]);
+        $this->assertSame(get_string('state_unlisted', self::COMPONENT), $data->state);
+    }
 }

@@ -19,10 +19,12 @@ data, so the name stays and the user-facing strings talk about discoverability.
 
 - `get_states(array $courseids)`, `get_state(int)`, `is_unlisted(int)` - the stored state,
   one query per request for any number of courses.
-- `is_public(int)` - the gate for an anonymous page. It also requires the course to be
+- `is_public(int)` / `are_public(array)` - the gate for an anonymous page. It also requires the course to be
   visible and **every category on its path** to be visible, because core's own visibility
   answer ends in a capability check that fails for user id 0 under `forcelogin`. It is a
-  property of the course, not of the viewer.
+  property of the course, not of the viewer. `are_public()` is the batched form, four
+  statements for any number of courses, and `is_public()` delegates to it so the two can
+  never disagree; a course that is not there answers `false` and throws nothing.
 - `set_state(int $courseid, int $state, ?int $userid = null)` - **the one place the
   publish capability is checked.** Entering or leaving the public state requires
   `local/unlistedcourses:publish` (manager only, no `clonepermissionsfrom`). A call that
@@ -31,6 +33,16 @@ data, so the name stays and the user-facing strings talk about discoverability.
 
 `\local_unlistedcourses\access` answers the per-viewer question for unlisted courses:
 `is_course_discoverable(int)`, `are_courses_discoverable(array)`, `filter_courses(array)`.
+It also carries the two methods the anonymous surface needs:
+`filter_courses_public(array)`, the **only** predicate that surface may use - it keeps a
+course when `discoverability::are_public()` says so and consults no viewer at all - and
+`prime_relationships(array $enrolled, array $pending = [])`, which fills the request-scoped
+relationship memo for the current viewer from an enrolment map the caller has already read,
+so `filter_courses()` stops probing the enrolment tables one course at a time. The primer
+writes **only** true: the caller vouches for a relationship it read, and is not
+authoritative about the absence of one, because being staff of a course is a relationship
+too. It is keyed by the viewer and dropped by `reset_caches()`.
+
 Somebody may discover an unlisted course when any of these holds:
 
 - they are actively enrolled;
@@ -46,11 +58,22 @@ plugins already carry.
 ## Categories
 
 `\local_unlistedcourses\category_discoverability` holds the same decision for a **course
-category**, with two states, listed (no row) and unlisted: `get_states()`, `get_state()`,
-`is_unlisted()`, `unlisted_ids()` and `set_state()` - **the one place
+category**, with the same three states: `get_states()`, `get_state()`, `is_unlisted()`,
+`unlisted_ids()`, `public_ids()` and `set_state()` - **the one place
 `local/unlistedcourses:managecategorystate` is checked**, on every real transition in both
-directions. A call that changes nothing needs no capability. Every change fires
+directions, **and `local/unlistedcourses:publishcategory` on every transition that enters or
+leaves the public state** (manager only, no `clonepermissionsfrom`: hiding a category from
+listings is an editing act, publishing it to the open web is not). A call that changes
+nothing needs no capability. Every change fires
 `\local_unlistedcourses\event\category_state_updated`.
+
+`is_public(int)` / `are_public(array)` answer whether a category may be served to a visitor
+who is not logged in: its own state public, its own row visible, every category on its path
+existing and visible, and no category on that path unlisted. **Ancestors need not be
+public** - the same composition the course side uses - and the most-specific rule decides
+what is inside: an unlisted course in a public category is never public, and neither is an
+unlisted subcategory. Like the course predicate it is viewer-independent, fail-closed,
+non-throwing for an id that is not there, and four statements for any number of ids.
 
 `\local_unlistedcourses\category_access` answers the per-viewer question for categories:
 `is_category_discoverable(int)`, `are_categories_discoverable(array)`,
@@ -98,6 +121,13 @@ the people holding a role here or above, and how many people it stays visible to
 staff, intersected over every unlisted category above it - and warns when that is nobody and
 when category themes are enabled. There is no backup or restore of a category's state:
 Moodle has no category backup a plugin could attach to.
+
+Its form follows the course form exactly: the "Public" option is offered only to a user
+holding `local/unlistedcourses:publishcategory`, and a category that is already public shows
+the control frozen with its value still submitting, so saving an unrelated change never
+un-publishes it and never fails over a value the editor did not touch. For a public category
+the page replaces the cohort and role accounting with what a visitor will be served, and
+warns when an unlisted or hidden category on the path makes the public state inert.
 
 ## What this plugin does not do
 

@@ -624,3 +624,128 @@ above the capability layer; this is a listing rule, not a permission.
 | 3 the page | 105 tests; 6 static steps with mustache; Behat 5 of 5; 8 of 8 gates |
 | 4 the theme | 246 tests; 7 static steps; Behat 10 of 10; 11 of 11 gates; the card-presentation gap found by the review and closed |
 | 5 hand-off | this section; both matrices with Behat and the plugin's full sweep are the remaining gates before any push |
+
+---
+
+## 15. Public categories (2026-09-13)
+
+Design record of the third category state. The plan this stage implements is
+`theme_boost_union_fundaseg/docs/category/README.md`, stage 1 — the category showcase the
+theme builds on top of it. Nothing in the theme is written yet; this section is the plugin
+half, and it is complete on its own.
+
+### What was built, and where
+
+| file | change |
+|---|---|
+| `classes/category_discoverability.php` | `STATE_PUBLIC = 2`, `states()` → three; `CAPABILITY_PUBLISH`; the publish gate in `set_state()`; `public_ids()`; `is_public()` / `are_public()` |
+| `classes/discoverability.php` | `are_public()`, the batched twin of `is_public()`, which now delegates to it |
+| `classes/access.php` | `filter_courses_public()` — the anonymous listing filter; `prime_relationships()` — the request-scoped relationship primer |
+| `classes/local/form/categorystate.php` | the third option, gated on the publish capability, with a persistent freeze when the category is already public |
+| `classes/output/category_preview.php` + its template | a public branch: what a visitor is served, and the two arrangements that make the state inert |
+| `classes/privacy/provider.php` | `category_state_label()` gains the public branch — without it a category last set to PUBLIC exports as "Listed" |
+| `db/access.php`, `db/install.xml`, `db/upgrade.php`, `version.php` | the capability, the field comment, a savepoint-only rung, version `2026091300` / `v5.2-r3` |
+| `lang/en`, `lang/pt_br` | the capability description, a rewritten `categorystate_help`, four `preview_public*` strings, the catstate `state` privacy line |
+
+`classes/event/category_state_updated.php` needed **no** change, and that was checked rather
+than assumed: the event carries `oldstate` and `newstate` as opaque ints in `other`, and its
+description prints them without mapping them to a vocabulary, so a third value travels
+through it untouched.
+
+### Decisions, closed by the owner on 2026-09-13
+
+| id | decision |
+|---|---|
+| D14 | An anonymous visitor inside a public category sees ONLY courses whose own state is PUBLIC. A listed course has no anonymous page — every link from its card is a login wall — so publishing its name would deliver nothing; and a category-level act must never publish everything inside it. One rule: a course is on the internet when, and only when, its own state says so. |
+| D15 | A category is effectively public when its own state is PUBLIC, it is visible, every ancestor exists and is visible, and no ancestor is UNLISTED. Ancestors need NOT be public: the same composition `discoverability::is_public()` already uses for courses. A strict chain would force a site to publish its whole root to publish one programme area. |
+| D16 | Publishing a category is its own capability, `local/unlistedcourses:publishcategory` — coursecat context, captype write, `RISK_SPAM`, manager `CAP_ALLOW`, no `clonepermissionsfrom` — checked in `set_state()` on every transition that enters or leaves PUBLIC, IN ADDITION to the manage capability that gates every real transition. The course side split hiding from publishing for the same reason; reusing the manage capability would grant the larger power through a rename. |
+| D20 | On the anonymous shell, a subcategory chip renders for every admitted subcategory (visible, not unlisted) that holds at least one public course; the chip links to the child's own page only when the child is itself PUBLIC. Theme-side, recorded here because it rests on D15. |
+
+### Semantics
+
+Three states per category, a row only for a non-default one, and the state is still a
+property of the path. The **most-specific rule** decides every composition: an UNLISTED
+course inside a PUBLIC category is never public, and an UNLISTED subcategory inside a PUBLIC
+category is never public. Nothing viewer-dependent is cached across requests; the new memos
+are request-scoped, and the public ones carry no viewer in their key because there is no
+viewer in their answer.
+
+| arrangement | `category_discoverability::is_public()` | what a visitor is served inside it |
+|---|---|---|
+| PUBLIC, visible, listed visible ancestors | yes | the courses whose own state is PUBLIC |
+| PUBLIC under an UNLISTED ancestor | no | nothing |
+| PUBLIC under a HIDDEN ancestor, or hidden itself | no | nothing |
+| UNLISTED or LISTED, however visible | no | nothing |
+| an id that does not exist, or a state row whose category is gone | no, and no exception | nothing |
+
+**`is_public()` and `are_public()` live on the state classes, not on `access` or
+`category_access`, and that is the load-bearing split.** Everything in those two predicates
+is an answer about a VIEWER — a cohort membership, a role assignment, a capability — and
+"public" is public for nobody in particular: it is composed from the stored state and from
+rows of the course and category tables, with no capability involved, because
+`accesslib.php:475-477` hard-denies every capability for user id 0 while `forcelogin` is on.
+Putting the anonymous answer beside the per-viewer one would invite a viewer term into an
+answer that must not have one. `access::filter_courses_public()` is the single exception and
+proves the rule: it is a listing filter that asks the state class and reads no `$USER` at all.
+
+### The budget
+
+`are_public()` is four statements for any number of ids, on both classes, and each was
+measured rather than asserted — `tests/category_discoverability_test.php` and
+`tests/discoverability_test.php` each compare the reads of a call over 200 with the reads of
+the same call over 2, and `tests/access_test.php` does it for `filter_courses_public()`.
+Every `IN` list is bounded by the ids the caller asked about or by the paths those ids carry,
+never by a population, because `get_in_or_equal()` emits one placeholder per item and never
+splits.
+
+| statement | categories | courses |
+|---|---|---|
+| 1 | the state of every id asked about | the state of every id asked about |
+| 2 | the candidates' own rows: `id, path, visible` | the candidates' own rows: `id, category, visible` |
+| 3 | the visibility of every ancestor named by those paths | the path of every distinct category those courses sit in |
+| 4 | — | the visibility of every distinct category on those paths |
+| memoised | `unlisted_ids()`, shared with the rest of the plugin | the same |
+
+### The primer, and why it exists
+
+`access::prime_relationships(array $enrolledcourseids, array $pendingcourseids = [])` fills
+the request-scoped relationship memo with TRUE for the current viewer, and never with false.
+
+It exists because `filter_courses()` is flat except in one place: a course that fails a term
+— its own UNLISTED state, or an UNLISTED ancestor — is probed through `eligible()`, at
+roughly **one statement per probed course**. Measured by the theme's load probe on a
+5000-course fixture: **105 probed courses cost 113 statements**. The caller that needs this
+is the category listing, which has already read the viewer's whole `{user_enrolments}` in one
+statement driven by `ue.userid`, so it knows the answer for those courses before it asks.
+
+Two properties make it safe. **Only true is ever written**: the caller is vouching for a
+relationship it read itself, and is not authoritative about the absence of one, because being
+staff of a course is a relationship too and no enrolment table carries it — so an unprimed
+course is computed exactly as before. And it is **keyed by the viewer**, like every memo in
+that class, because `setUser()` and "log in as" switch users inside one request; the test
+primes as one user, switches, and asserts the second viewer's answer is computed rather than
+inherited. `reset_caches()` drops it.
+
+### Residue
+
+Section 14's residue table stands unchanged, and the public state adds one row to it. Row 14
+of that table — "any future caller of `core_course_category::get($id, $strictness, true)`",
+twelve sites in core 5.2 — gains a **thirteenth**: the theme's own `category.php`, the
+anonymous shell of stage 5, which must pass `alwaysreturnhidden = true` to render a category
+it has already admitted through `category_discoverability::is_public()`. That is not a leak
+as long as the predicate runs FIRST and the page refuses on a false answer with the same 303
+it gives a nonexistent id; it is listed here because the sweep of that call site on each core
+upgrade now has one more caller to check, and because the ordering is the whole safety of it.
+
+The public state changes nothing about rows 1-13: a public category is *meant* to be named,
+so every surface that leaks an unlisted category's name is simply not a leak for this one.
+
+### Stage status
+
+| gate | as measured, 2026-09-13, m502b |
+|---|---|
+| PHPUnit | `OK (124 tests, 510 assertions)` — 19 more tests than stage 3's 105 |
+| static | `phpcs`, `phpdoc`, `validate`, `savepoints`, `mustache` — all OK on `MOODLE_502_STABLE` |
+| schema | `xmllint --noout --schema lib/xmldb/xmldb.xsd db/install.xml` validates |
+| mutations | six new gates — `cat_publish_gate`, `cat_public_needs_visible`, `cat_public_needs_ancestor`, `cat_public_fail_closed`, `filter_public_course_term`, `prime_ignored` — and two rewritten (`public_ignores_state`, `public_needs_category`, whose lines moved into `are_public()`); 62 in the spec, swept by the verifier |
+| Behat | one new scenario, written and not run in this stage: the suite is the verifier's, and Behat costs minutes |

@@ -33,7 +33,9 @@ namespace local_unlistedcourses;
  * answer feeds course listings, the enrolment page and anything else that
  * would otherwise print its name. The other two states (listed, public) are
  * discoverable by anybody; whether a PUBLIC course may be served to a visitor
- * who is not logged in is {@see discoverability::is_public()}, not this.
+ * who is not logged in is {@see discoverability::is_public()}, not this, and
+ * {@see filter_courses_public()} is the one method here that asks it - the
+ * anonymous listing's filter, which reads no $USER at all.
  *
  * CURRENT USER ONLY, and not by choice. The two predicates this class
  * delegates to both read the $USER global rather than accepting a user id:
@@ -217,6 +219,90 @@ class access {
             $kept[$key] = $course;
         }
         return $kept;
+    }
+
+    /**
+     * Keep only the courses a visitor who is not logged in may be shown.
+     *
+     * THE ONLY PREDICATE THE ANONYMOUS SHELL MAY USE, and the one that never
+     * consults the viewer: everything else in this class is an answer about
+     * $USER, and there is no $USER here. A course is kept when
+     * {@see discoverability::are_public()} says so - its own state public, the
+     * course visible, every category on its path existing and visible, and no
+     * category on that path unlisted - and dropped otherwise, so the answer is
+     * the same for a visitor, for an administrator and for a crawler.
+     *
+     * A course whose own state is not public is dropped however public the
+     * category around it is. That is the whole rule: a course reaches the
+     * internet when, and only when, somebody holding the publish capability
+     * said so about that course. A listed course inside a public category has
+     * no anonymous page to offer - every link from it is a login wall - and an
+     * unlisted one is being withheld on purpose.
+     *
+     * Accepts anything with an ->id, which covers the course records and the
+     * core_course_list_element objects a listing passes around, and preserves
+     * the incoming keys. A ->category or ->visible carried by the item is NOT
+     * read: this is the gate for the open web, and the two fields it would save
+     * are exactly the two a stale or hand-built list element gets wrong. The
+     * saving would be one statement per request in any case, not one per course.
+     *
+     * @param array $courses Course records or list elements, any keys.
+     * @return array The same array minus every course a visitor must not be shown.
+     */
+    public static function filter_courses_public(array $courses): array {
+        if (!$courses) {
+            return $courses;
+        }
+
+        $ids = [];
+        foreach ($courses as $course) {
+            $ids[] = (int) $course->id;
+        }
+        $answers = discoverability::are_public($ids);
+
+        $kept = [];
+        foreach ($courses as $key => $course) {
+            // Fail closed: an id the predicate did not answer for is not served anonymously.
+            if (!($answers[(int) $course->id] ?? false)) {
+                continue;
+            }
+            $kept[$key] = $course;
+        }
+        return $kept;
+    }
+
+    /**
+     * Vouch for the current user's relationship with these courses, for this request.
+     *
+     * A caller that has just read {@see \user_enrolments} for the whole of a
+     * subtree already knows which of its courses this user is enrolled in and
+     * which ones hold an application of theirs. Handing that map over here fills
+     * the relationship memo, so {@see filter_courses()} answers the category
+     * clamp for those courses out of memory instead of asking is_enrolled() and
+     * the pending-application query one course at a time - measured at roughly
+     * one statement per probed course, which is the one part of a listing that
+     * is not flat.
+     *
+     * ONLY TRUE IS EVER WRITTEN. The caller is vouching for a relationship it
+     * read itself; it is not authoritative about the absence of one, because
+     * being staff of a course is a relationship too and no enrolment table
+     * carries it. An unprimed course is computed exactly as before.
+     *
+     * Keyed by the CURRENT viewer, like every other memo here: setUser() and
+     * "log in as" switch users inside one request, and what was primed for one
+     * of them must never answer for the next. {@see reset_caches()} drops it.
+     *
+     * @param array $enrolledcourseids Course ids this user holds an active enrolment in.
+     * @param array $pendingcourseids Course ids this user has an application awaiting a decision in.
+     * @return void
+     */
+    public static function prime_relationships(array $enrolledcourseids, array $pendingcourseids = []): void {
+        global $USER;
+
+        $viewer = (int) $USER->id;
+        foreach (array_merge($enrolledcourseids, $pendingcourseids) as $courseid) {
+            self::$related[self::memo_key($viewer, (int) $courseid)] = true;
+        }
     }
 
     /**

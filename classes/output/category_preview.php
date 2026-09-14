@@ -50,6 +50,14 @@ use local_unlistedcourses\category_discoverability;
  * headline that ignored the ancestor would report people who cannot see the
  * category and would fall silent exactly when the answer is nobody.
  *
+ * A PUBLIC CATEGORY GETS A DIFFERENT PANEL, and no accounting at all. The cohort
+ * and role terms answer "who still sees this while it is unlisted", and a public
+ * category is being shown to everybody, visitors included - so the counts would
+ * answer a question nobody asked, at two statements per unlisted ancestor. What
+ * an administrator needs there instead is what a visitor will be served, and the
+ * two arrangements that make the public state inert: an unlisted category above
+ * it, or a hidden category anywhere on its path.
+ *
  * TWO GATES ARE INDEPENDENT HERE, and conflating them would lie in one direction
  * or the other. Whether the viewer may read cohort NAMES is
  * moodle/cohort:view; whether the category is visible to anybody is a fact about
@@ -98,6 +106,11 @@ class category_preview implements \renderable, \templatable {
         $ancestors = array_values(array_diff($pathids, [$categoryid]));
         $state = category_discoverability::get_state($categoryid);
         $unlisted = $state === category_discoverability::STATE_UNLISTED;
+        $unlistedancestors = array_values(array_intersect($ancestors, category_discoverability::unlisted_ids()));
+
+        if ($state === category_discoverability::STATE_PUBLIC) {
+            return $this->public_context($state, $pathids, $unlistedancestors);
+        }
 
         $cohortsviewable = has_capability('moodle/cohort:view', $this->context);
         $cohorts = [];
@@ -129,7 +142,6 @@ class category_preview implements \renderable, \templatable {
            keep the "visible to nobody" warning quiet on the one arrangement where
            nobody is the true answer. Two more statements per unlisted ancestor, which
            is a price only this admin page pays. */
-        $unlistedancestors = array_values(array_intersect($ancestors, category_discoverability::unlisted_ids()));
         foreach ($unlistedancestors as $ancestorid) {
             $eligible = array_intersect($eligible, self::eligible_users($ancestorid, $pathids));
         }
@@ -138,6 +150,9 @@ class category_preview implements \renderable, \templatable {
         return [
             'state' => $state,
             'unlisted' => $unlisted,
+            'public' => false,
+            'publicancestorunlisted' => false,
+            'publichidden' => false,
             'ancestorunlisted' => (bool) $unlistedancestors,
             'cohortsviewable' => $cohortsviewable,
             'cohorts' => $cohorts,
@@ -147,8 +162,84 @@ class category_preview implements \renderable, \templatable {
             'roleholders' => count($roleusers),
             'visiblecount' => $visiblecount,
             'nobodywarning' => $unlisted && $visiblecount === 0,
-            'themewarning' => !empty($CFG->allowcategorythemes),
+            'themewarning' => self::theme_warning(),
         ];
+    }
+
+    /**
+     * Whether this site lets a category carry a theme of its own.
+     *
+     * Read in both branches, from here rather than twice, because the two
+     * branches must not be able to disagree about a fact of the site: a theme
+     * set on a category switches its pages away from the theme that withholds
+     * it, and that is as true of a public category as of an unlisted one.
+     *
+     * @return bool True when category themes are enabled.
+     */
+    private static function theme_warning(): bool {
+        global $CFG;
+
+        return !empty($CFG->allowcategorythemes);
+    }
+
+    /**
+     * Everything the template names, for a category in the public state.
+     *
+     * The same keys as the unlisted branch, because one template reads both,
+     * with the accounting empty: see the class docblock for why it is not
+     * computed rather than computed and hidden.
+     *
+     * 'ancestorunlisted' keeps its truthful value here although the template
+     * renders it only in the non-public branch, where the public panel says the
+     * same thing through 'publicancestorunlisted' in its own words. Exporting
+     * false for it would be cheaper by nothing and would make the one key whose
+     * name states a fact about the tree state the opposite of that fact, which
+     * is a trap for whoever next renders it on both branches.
+     *
+     * @param int $state The stored state, which is the public one here.
+     * @param array $pathids This category's own id and every ancestor's.
+     * @param array $unlistedancestors The ids of the unlisted categories above this one.
+     * @return array The template context.
+     */
+    private function public_context(int $state, array $pathids, array $unlistedancestors): array {
+        return [
+            'state' => $state,
+            'unlisted' => false,
+            'public' => true,
+            'publicancestorunlisted' => (bool) $unlistedancestors,
+            'publichidden' => self::path_has_hidden($pathids),
+            'ancestorunlisted' => (bool) $unlistedancestors,
+            'cohortsviewable' => false,
+            'cohorts' => [],
+            'hascohorts' => false,
+            'cohortsmore' => 0,
+            'cohortsurl' => (new \moodle_url('/cohort/index.php', ['contextid' => $this->context->id]))->out(false),
+            'roleholders' => 0,
+            'visiblecount' => 0,
+            'nobodywarning' => false,
+            'themewarning' => self::theme_warning(),
+        ];
+    }
+
+    /**
+     * Whether this category or any category above it is hidden.
+     *
+     * The visibility half of the public composition, read here so the panel can
+     * name the reason rather than just saying "not public": a hidden category is
+     * never public, and neither is one inside a hidden category.
+     *
+     * @param array $pathids This category's own id and every ancestor's.
+     * @return bool True when at least one of them is hidden.
+     */
+    private static function path_has_hidden(array $pathids): bool {
+        global $DB;
+
+        if (!$pathids) {
+            return true;
+        }
+        [$insql, $params] = $DB->get_in_or_equal($pathids, SQL_PARAMS_NAMED, 'cat');
+        $visiblecount = $DB->count_records_select('course_categories', "id $insql AND visible = 1", $params);
+        return $visiblecount !== count($pathids);
     }
 
     /**

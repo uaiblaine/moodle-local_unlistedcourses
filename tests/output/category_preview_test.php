@@ -496,4 +496,174 @@ final class category_preview_test extends \advanced_testcase {
         set_config('allowcategorythemes', 1);
         $this->assertTrue($this->export($category, $context)['themewarning']);
     }
+
+    /**
+     * A public category exports the public branch, and none of the cohort or role accounting.
+     *
+     * The control is the same category before it is published: the cohort it
+     * carries IS counted then, so the empty accounting afterwards is the public
+     * branch doing it and not an empty fixture.
+     *
+     * @return void
+     */
+    public function test_a_public_category_exports_the_public_branch_and_no_accounting(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $category = $this->getDataGenerator()->create_category();
+        $context = \core\context\coursecat::instance($category->id);
+        $cohort = $this->create_cohort_at($context, 'Nursing 2026');
+        $this->add_to_cohort((int) $cohort->id, (int) $this->getDataGenerator()->create_user()->id);
+
+        // Control: while the category is not public, the accounting is exported and is not empty.
+        $data = $this->export($category, $context);
+        $this->assertFalse($data['public']);
+        $this->assertTrue($data['hascohorts']);
+        $this->assertSame(1, $data['visiblecount']);
+
+        category_discoverability::set_state((int) $category->id, category_discoverability::STATE_PUBLIC);
+        $data = $this->export($category, $context);
+
+        $this->assertTrue($data['public']);
+        $this->assertSame(category_discoverability::STATE_PUBLIC, $data['state']);
+        $this->assertFalse($data['unlisted']);
+        $this->assertFalse($data['hascohorts']);
+        $this->assertSame([], $data['cohorts']);
+        $this->assertSame(0, $data['roleholders']);
+        $this->assertSame(0, $data['visiblecount']);
+        $this->assertFalse($data['nobodywarning'], 'The "visible to nobody" warning belongs to the unlisted branch.');
+    }
+
+    /**
+     * The public warnings name an unlisted ancestor and a hidden category on the path.
+     *
+     * @return void
+     */
+    public function test_the_public_warnings_name_an_unlisted_ancestor_and_a_hidden_path(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $generator = $this->getDataGenerator();
+
+        $parent = $generator->create_category();
+        $child = $generator->create_category(['parent' => $parent->id]);
+        $childcontext = \core\context\coursecat::instance($child->id);
+        category_discoverability::set_state((int) $child->id, category_discoverability::STATE_PUBLIC);
+
+        $data = $this->export($child, $childcontext);
+        $this->assertTrue($data['public'], 'Precondition: the category really is in the public state.');
+        $this->assertFalse($data['publicancestorunlisted']);
+        $this->assertFalse($data['publichidden']);
+
+        category_discoverability::set_state((int) $parent->id, category_discoverability::STATE_UNLISTED);
+        $data = $this->export($child, $childcontext);
+        $this->assertTrue($data['publicancestorunlisted'], 'An unlisted ancestor makes the public state inert.');
+        $this->assertFalse($data['publichidden']);
+        category_discoverability::set_state((int) $parent->id, category_discoverability::STATE_DEFAULT);
+
+        $DB->set_field('course_categories', 'visible', 0, ['id' => $parent->id]);
+        $data = $this->export($child, $childcontext);
+        $this->assertTrue($data['publichidden'], 'A hidden ancestor makes the public state inert.');
+        $this->assertFalse($data['publicancestorunlisted']);
+        $DB->set_field('course_categories', 'visible', 1, ['id' => $parent->id]);
+
+        $DB->set_field('course_categories', 'visible', 0, ['id' => $child->id]);
+        $data = $this->export($child, $childcontext);
+        $this->assertTrue($data['publichidden'], 'A hidden category of its own is never public either.');
+
+        // Control: visible again, and both warnings fall silent.
+        $DB->set_field('course_categories', 'visible', 1, ['id' => $child->id]);
+        $data = $this->export($child, $childcontext);
+        $this->assertFalse($data['publichidden']);
+        $this->assertFalse($data['publicancestorunlisted']);
+    }
+
+    /**
+     * The public branch of the template renders well-formed markup, warnings and all.
+     *
+     * THE STATIC GATE CANNOT SEE THIS BRANCH. The mustache lint renders a template
+     * against the one "Example context (json)" block in its docblock and validates the
+     * HTML that comes out; the two branches here are mutually exclusive, so whichever
+     * context the block carries, the other branch's markup is never parsed. The block
+     * carries the unlisted branch, which is the larger one, and this test is what stands
+     * in for the gate on the other: an unclosed div or a stray brace in the public panel
+     * would leave the fragment unparseable, and nothing else in the pipeline would say so.
+     *
+     * The control is the unlisted branch rendered by the same assertion: it is the branch
+     * the lint does cover, so if the check could not fail it would have to pass there too
+     * for a reason that is not well-formedness.
+     *
+     * @return void
+     */
+    public function test_the_public_branch_of_the_template_renders_well_formed_markup(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $generator = $this->getDataGenerator();
+
+        $parent = $generator->create_category();
+        $child = $generator->create_category(['parent' => $parent->id]);
+        $context = \core\context\coursecat::instance($child->id);
+        category_discoverability::set_state((int) $child->id, category_discoverability::STATE_PUBLIC);
+        category_discoverability::set_state((int) $parent->id, category_discoverability::STATE_UNLISTED);
+        set_config('allowcategorythemes', 1);
+
+        $data = $this->export($child, $context);
+        $this->assertTrue($data['public'], 'Precondition: the public branch is the one being rendered.');
+        $this->assertTrue($data['publicancestorunlisted'], 'Precondition: the first warning is switched on.');
+        $this->assertFalse($data['publichidden'], 'The hidden warning is switched on separately below.');
+
+        $html = $this->render($data);
+        $this->assertStringContainsString(get_string('preview_publicheading', 'local_unlistedcourses'), $html);
+        $this->assertStringContainsString(get_string('preview_publicancestor', 'local_unlistedcourses'), $html);
+        $this->assert_well_formed($html, 'The public panel with its unlisted-ancestor warning.');
+
+        // Both warnings at once, which is the arrangement with the most markup in it.
+        $data['publichidden'] = true;
+        $html = $this->render($data);
+        $this->assertStringContainsString(get_string('preview_publichidden', 'local_unlistedcourses'), $html);
+        $this->assertStringContainsString(get_string('preview_theme', 'local_unlistedcourses'), $html);
+        $this->assert_well_formed($html, 'The public panel with both warnings and the theme warning.');
+
+        /* Control: the branch the lint does cover passes the same assertion, so a check
+           that could never fail would have had to pass here for another reason. */
+        category_discoverability::set_state((int) $child->id, category_discoverability::STATE_UNLISTED);
+        $this->assert_well_formed($this->render($this->export($child, $context)), 'The unlisted branch.');
+    }
+
+    /**
+     * Render the preview template with a template context.
+     *
+     * @param array $data The template context, as export_for_template() builds it.
+     * @return string The rendered fragment.
+     */
+    private function render(array $data): string {
+        $page = new \moodle_page();
+        $page->set_url('/local/unlistedcourses/category.php');
+        $page->set_context(\core\context\system::instance());
+
+        return $page->get_renderer('core')->render_from_template('local_unlistedcourses/category_preview', $data);
+    }
+
+    /**
+     * Assert that a rendered fragment parses as one well-formed element tree.
+     *
+     * The fragment has a single root div, so XML parsing is exactly the question
+     * asked: every element opened is closed, in order, with quoted attributes.
+     *
+     * @param string $html The rendered fragment.
+     * @param string $message What was rendered, named in the failure.
+     * @return void
+     */
+    private function assert_well_formed(string $html, string $message): void {
+        $previous = libxml_use_internal_errors(true);
+        libxml_clear_errors();
+        $parsed = simplexml_load_string($html);
+        $errors = array_map(static function ($error) {
+            return trim($error->message) . ' (line ' . $error->line . ')';
+        }, libxml_get_errors());
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+
+        $this->assertNotFalse($parsed, $message . ' did not parse: ' . implode('; ', $errors));
+    }
 }

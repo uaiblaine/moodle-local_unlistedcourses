@@ -26,9 +26,17 @@
     Context variables required for this template - named in prose, because a Mustache
     comment ends at its first closing pair and a tag written here would truncate it:
 
-    * state - int, the stored state: 0 listed, 1 unlisted.
+    * state - int, the stored state: 0 listed, 1 unlisted, 2 public.
     * unlisted - bool, this category's own row says unlisted.
-    * ancestorunlisted - bool, a category above this one is unlisted.
+    * public - bool, this category's own row says public; the panel then explains what a
+      visitor is served instead of accounting for who still sees it.
+    * publicancestorunlisted - bool, public, but a category above this one is unlisted, so
+      the public state is inert.
+    * publichidden - bool, public, but this category or one above it is hidden, so the
+      public state is inert.
+    * ancestorunlisted - bool, a category above this one is unlisted. Rendered only in the
+      non-public branch: a public category is told the same thing, in its own words, by
+      publicancestorunlisted, and exports this one truthfully all the same.
     * cohortsviewable - bool, the viewer may read the cohort names of this category.
     * cohorts - array of the cohorts defined at this category, each carrying a name
       string and a members int.
@@ -40,10 +48,19 @@
     * nobodywarning - bool, unlisted and visible to nobody besides staff.
     * themewarning - bool, category themes are enabled on this site.
 
+    The example context below exercises the UNLISTED branch, and one context is all the
+    lint renders: the two branches are mutually exclusive, so whichever it is given, the
+    other one's markup is never parsed by the gate. The public branch's markup is checked
+    instead by category_preview_test, which renders this template with a public context and
+    asserts the result is well formed - see that test for why the check exists here at all.
+
     Example context (json):
     {
         "state": 1,
         "unlisted": true,
+        "public": false,
+        "publicancestorunlisted": false,
+        "publichidden": false,
         "ancestorunlisted": true,
         "cohortsviewable": true,
         "cohorts": [
@@ -60,6 +77,17 @@
     }
 }}
 <div class="local-unlistedcourses-preview">
+    {{#public}}
+        <h4>{{#str}}preview_publicheading, local_unlistedcourses{{/str}}</h4>
+        <p class="mb-2">{{#str}}preview_public, local_unlistedcourses{{/str}}</p>
+        {{#publicancestorunlisted}}
+            <div class="alert alert-warning" role="alert">{{#str}}preview_publicancestor, local_unlistedcourses{{/str}}</div>
+        {{/publicancestorunlisted}}
+        {{#publichidden}}
+            <div class="alert alert-warning" role="alert">{{#str}}preview_publichidden, local_unlistedcourses{{/str}}</div>
+        {{/publichidden}}
+    {{/public}}
+    {{^public}}
     <h4>{{#str}}preview_heading, local_unlistedcourses{{/str}}</h4>
     {{#ancestorunlisted}}
         <div class="alert alert-info" role="alert">{{#str}}preview_ancestor, local_unlistedcourses{{/str}}</div>
@@ -89,6 +117,7 @@
     {{#nobodywarning}}
         <div class="alert alert-warning" role="alert">{{#str}}preview_visiblenone, local_unlistedcourses{{/str}}</div>
     {{/nobodywarning}}
+    {{/public}}
     {{#themewarning}}
         <div class="alert alert-warning" role="alert">{{#str}}preview_theme, local_unlistedcourses{{/str}}</div>
     {{/themewarning}}

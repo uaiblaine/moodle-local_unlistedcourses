@@ -84,6 +84,9 @@ class discoverability {
     /** @var array Request cache of the state, keyed courseid => int. */
     private static array $states = [];
 
+    /** @var array Request cache of the anonymous answer, keyed courseid => bool. */
+    private static array $public = [];
+
     /**
      * The valid states.
      *
@@ -100,6 +103,7 @@ class discoverability {
      */
     public static function reset_caches(): void {
         self::$states = [];
+        self::$public = [];
     }
 
     /**
@@ -168,9 +172,9 @@ class discoverability {
     /**
      * Whether the course's landing page may be served to a visitor who is not logged in.
      *
-     * This is the gate for an anonymous page, so it cannot delegate: a course
-     * that is public in this table but hidden, or that sits inside a hidden
-     * category, is NOT public. Core's own answer to "may this visitor see the
+     * This is the gate for an anonymous page, so it delegates to no capability:
+     * a course that is public in this table but hidden, or that sits inside a
+     * hidden category, is NOT public. Core's own answer to "may this visitor see the
      * course" (core_course_category::can_view_course_info()) ends in a
      * capability check, and accesslib hard-denies every capability for user
      * id 0 while forcelogin is on - so the visibility half of that answer is
@@ -185,38 +189,175 @@ class discoverability {
      * category has nobody it could be served to anonymously. Answering
      * otherwise would let "public" quietly outrank the category above it.
      *
-     * Independent of the viewer, unlike everything in {@see access}.
+     * Independent of the viewer, unlike everything in {@see access}. One course
+     * at a time; {@see are_public()} is the same answer for a whole listing and
+     * holds the composition, which this hands over to so the two can never
+     * disagree.
      *
      * @param int $courseid The course id.
      * @return bool True when the course may be served anonymously.
      */
     public static function is_public(int $courseid): bool {
+        $answers = self::are_public([$courseid]);
+        return $answers[$courseid] ?? false;
+    }
+
+    /**
+     * Whether each of these courses may be served to a visitor who is not logged in.
+     *
+     * The batched twin of {@see is_public()}, composing exactly the same answer
+     * and costing four statements whatever the size of the list: the state of
+     * the ids, the courses' own rows, the paths of the distinct categories they
+     * sit in, and the visibility of the distinct categories on those paths. The
+     * memoised unlisted ids are the fifth read, shared with the rest of the
+     * plugin. Every IN list is bounded by what the caller asked for or by the
+     * paths those ids carry, never by a population.
+     *
+     * It exists because the anonymous listing asks about a whole page at once,
+     * and a loop over is_public() would be four statements PER COURSE.
+     *
+     * NON-THROWING FOR A COURSE THAT IS NOT THERE, and false for it: the ids
+     * reaching this come from an anonymous surface, so a missing course is an
+     * answer, never an exception. Memoised per course for the request, with no
+     * viewer in the key, because there is no viewer in the answer.
+     *
+     * @param array $courseids Course ids.
+     * @return array Map of courseid => bool, deduplicated, in the order given.
+     */
+    public static function are_public(array $courseids): array {
         global $DB;
 
-        if (self::get_state($courseid) !== self::STATE_PUBLIC) {
-            return false;
+        $courseids = array_values(array_unique(array_map('intval', $courseids)));
+        $answers = [];
+        $unknown = [];
+        foreach ($courseids as $courseid) {
+            if (array_key_exists($courseid, self::$public)) {
+                $answers[$courseid] = self::$public[$courseid];
+            } else {
+                $unknown[] = $courseid;
+            }
         }
 
-        $course = $DB->get_record('course', ['id' => $courseid], 'id, category, visible');
-        if (!$course || !$course->visible) {
-            return false;
+        if ($unknown) {
+            // One statement for the state of every id not already known in this request.
+            $states = self::get_states($unknown);
+            $candidates = [];
+            foreach ($unknown as $courseid) {
+                if ($states[$courseid] !== self::STATE_PUBLIC) {
+                    $answers[$courseid] = self::remember($courseid, false);
+                } else {
+                    $candidates[] = $courseid;
+                }
+            }
+
+            // One statement for the candidates' own rows: their visibility and their category.
+            $courses = $candidates
+                ? $DB->get_records_list('course', 'id', $candidates, '', 'id, category, visible')
+                : [];
+            $categories = [];
+            foreach ($candidates as $courseid) {
+                $course = $courses[$courseid] ?? null;
+                if (!$course || !$course->visible) {
+                    $answers[$courseid] = self::remember($courseid, false);
+                    continue;
+                }
+                $categories[$courseid] = (int) $course->category;
+            }
+
+            $paths = self::category_paths($categories);
+            $visible = self::path_visibility($paths);
+            foreach ($categories as $courseid => $categoryid) {
+                $answers[$courseid] = self::remember($courseid, self::path_is_public($paths[$categoryid] ?? [], $visible));
+            }
         }
 
-        $category = $DB->get_record('course_categories', ['id' => $course->category], 'id, path');
-        if (!$category) {
-            return false;
+        $ordered = [];
+        foreach ($courseids as $courseid) {
+            $ordered[$courseid] = $answers[$courseid];
         }
-        $ids = array_map('intval', array_filter(explode('/', (string) $category->path)));
+        return $ordered;
+    }
+
+    /**
+     * Memoise one anonymous answer for the rest of the request, and hand it back.
+     *
+     * @param int $courseid The course id.
+     * @param bool $answer The answer.
+     * @return bool The same answer.
+     */
+    private static function remember(int $courseid, bool $answer): bool {
+        self::$public[$courseid] = $answer;
+        return $answer;
+    }
+
+    /**
+     * The path of every distinct category these courses sit in, in one statement.
+     *
+     * @param array $categories Map of courseid => categoryid.
+     * @return array Map of categoryid => int[] path ids, missing for a category with no row.
+     */
+    private static function category_paths(array $categories): array {
+        global $DB;
+
+        $categoryids = array_values(array_unique($categories));
+        if (!$categoryids) {
+            return [];
+        }
+
+        $paths = [];
+        foreach ($DB->get_records_list('course_categories', 'id', $categoryids, '', 'id, path') as $category) {
+            $paths[(int) $category->id] = array_values(
+                array_map('intval', array_filter(explode('/', (string) $category->path)))
+            );
+        }
+        return $paths;
+    }
+
+    /**
+     * The visibility of every distinct category named by these paths, in one statement.
+     *
+     * @param array $paths Map of categoryid => int[] path ids.
+     * @return array Map of categoryid => record carrying visible, missing for an id with no row.
+     */
+    private static function path_visibility(array $paths): array {
+        global $DB;
+
+        $ids = [];
+        foreach ($paths as $pathids) {
+            foreach ($pathids as $pathid) {
+                $ids[$pathid] = true;
+            }
+        }
+        if (!$ids) {
+            return [];
+        }
+        return $DB->get_records_list('course_categories', 'id', array_keys($ids), '', 'id, visible');
+    }
+
+    /**
+     * Whether a course's category path admits an anonymous visitor.
+     *
+     * Every category on it must exist and be visible, and none of them may be
+     * unlisted. An empty path - a course whose category has vanished - fails
+     * closed.
+     *
+     * @param array $ids The category ids on the path, ancestor first.
+     * @param array $visible Map of categoryid => record carrying visible.
+     * @return bool True when nothing on the path refuses it.
+     */
+    private static function path_is_public(array $ids, array $visible): bool {
         if (!$ids) {
             return false;
         }
         if (array_intersect($ids, category_discoverability::unlisted_ids())) {
             return false;
         }
-
-        [$insql, $params] = $DB->get_in_or_equal($ids, SQL_PARAMS_NAMED);
-        $visiblecount = $DB->count_records_select('course_categories', "id $insql AND visible = 1", $params);
-        return $visiblecount === count($ids);
+        foreach ($ids as $pathid) {
+            if (empty($visible[$pathid]) || !$visible[$pathid]->visible) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

@@ -842,4 +842,278 @@ final class access_test extends \advanced_testcase {
             'A different viewer, with no reset in between, must get their own answer.'
         );
     }
+
+    /**
+     * Put a course in any state as admin, leaving the test's viewer where it was.
+     *
+     * @param int $courseid The course id.
+     * @param int $state One of the state constants.
+     * @return void
+     */
+    private function set_course_state(int $courseid, int $state): void {
+        $current = $GLOBALS['USER'];
+        $this->setAdminUser();
+        discoverability::set_state($courseid, $state);
+        $this->setUser($current);
+        access::reset_caches();
+    }
+
+    /**
+     * Put a category in any state as admin, leaving the test's viewer where it was.
+     *
+     * @param int $categoryid The category id.
+     * @param int $state One of the state constants.
+     * @return void
+     */
+    private function set_category_state(int $categoryid, int $state): void {
+        $current = $GLOBALS['USER'];
+        $this->setAdminUser();
+        category_discoverability::set_state($categoryid, $state);
+        $this->setUser($current);
+        access::reset_caches();
+    }
+
+    /**
+     * Public, visible course rows in a category, written straight to the tables.
+     *
+     * A budget fixture: the predicate reads id, category and visible plus the
+     * state row, and a generator course at this size costs minutes for parts of
+     * a course nothing here looks at.
+     *
+     * @param int $categoryid The category the courses sit in.
+     * @param int $count How many to create.
+     * @return array The course ids.
+     */
+    private function seed_public_courses(int $categoryid, int $count): array {
+        global $DB;
+
+        $ids = [];
+        for ($i = 0; $i < $count; $i++) {
+            $ids[] = (int) $DB->insert_record('course', (object) [
+                'category' => $categoryid,
+                'fullname' => 'Budget course ' . $categoryid . '-' . $i,
+                'shortname' => 'bc' . $categoryid . '-' . $i,
+                'visible' => 1,
+                'timecreated' => time(),
+                'timemodified' => time(),
+            ]);
+        }
+        $rows = [];
+        foreach ($ids as $courseid) {
+            $rows[] = (object) [
+                'courseid' => $courseid,
+                'state' => discoverability::STATE_PUBLIC,
+                'usermodified' => 0,
+                'timemodified' => time(),
+            ];
+        }
+        $DB->insert_records(discoverability::TABLE, $rows);
+        return $ids;
+    }
+
+    /**
+     * filter_courses_public() keeps a course only when its OWN state is public.
+     *
+     * D14 and the most-specific rule together: inside a public category, a
+     * listed course is withheld because it has no anonymous page to offer, and
+     * an unlisted course is withheld because unlisted outranks the category
+     * above it. The incoming keys and their order survive.
+     *
+     * @return void
+     */
+    public function test_filter_courses_public_keeps_only_courses_whose_own_state_is_public(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $parent = $generator->create_category();
+        $category = $generator->create_category(['parent' => $parent->id]);
+        $subcategory = $generator->create_category(['parent' => $category->id]);
+        $this->setAdminUser();
+        $this->set_category_state((int) $category->id, category_discoverability::STATE_PUBLIC);
+        $this->set_category_state((int) $subcategory->id, category_discoverability::STATE_UNLISTED);
+
+        $kept = $generator->create_course(['category' => $category->id]);
+        $second = $generator->create_course(['category' => $category->id]);
+        $unlisted = $generator->create_course(['category' => $category->id]);
+        $listed = $generator->create_course(['category' => $category->id]);
+        $insub = $generator->create_course(['category' => $subcategory->id]);
+        $hidden = $generator->create_course(['category' => $category->id, 'visible' => 0]);
+
+        foreach ([$kept, $second, $insub, $hidden] as $course) {
+            $this->set_course_state((int) $course->id, discoverability::STATE_PUBLIC);
+        }
+        $this->set_course_state((int) $unlisted->id, discoverability::STATE_UNLISTED);
+
+        $courses = [
+            'hidden' => (object) ['id' => (int) $hidden->id],
+            'insub' => (object) ['id' => (int) $insub->id],
+            'second' => (object) ['id' => (int) $second->id],
+            'listed' => (object) ['id' => (int) $listed->id],
+            'unlisted' => (object) ['id' => (int) $unlisted->id],
+            'kept' => (object) ['id' => (int) $kept->id],
+        ];
+
+        access::reset_caches();
+        $this->assertSame(
+            ['second', 'kept'],
+            array_keys(access::filter_courses_public($courses)),
+            'Only the two public courses survive, with their keys and their order.'
+        );
+
+        /* The answer is a property of the courses, never of who is asking: the same call
+           as a visitor who is not logged in returns exactly the same set. */
+        $this->setUser(0);
+        access::reset_caches();
+        $this->assertSame(['second', 'kept'], array_keys(access::filter_courses_public($courses)));
+    }
+
+    /**
+     * filter_courses_public() over 200 courses costs what it costs over 2.
+     *
+     * The large set is spread over twenty categories against the small set's one,
+     * for the reason discoverability_test gives on the predicate this filter calls:
+     * with everything in a single category the equality would also hold for an
+     * implementation that batched per distinct category rather than per request.
+     *
+     * @return void
+     */
+    public function test_filter_courses_public_reads_the_same_for_two_courses_and_for_two_hundred(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $parent = $generator->create_category();
+        $category = $generator->create_category(['parent' => $parent->id]);
+
+        $small = [];
+        foreach ($this->seed_public_courses((int) $category->id, 2) as $courseid) {
+            $small[] = (object) ['id' => $courseid];
+        }
+        $large = [];
+        $largeids = [];
+        for ($i = 0; $i < 20; $i++) {
+            $spread = $generator->create_category(['parent' => $parent->id]);
+            foreach ($this->seed_public_courses((int) $spread->id, 10) as $courseid) {
+                $largeids[] = $courseid;
+                $large[] = (object) ['id' => $courseid];
+            }
+        }
+        [$insql, $params] = $DB->get_in_or_equal($largeids, SQL_PARAMS_NAMED, 'crs');
+        $this->assertCount(
+            20,
+            array_unique($DB->get_fieldset_select('course', 'category', "id $insql", $params)),
+            'The large set must be spread over twenty distinct categories, not one.'
+        );
+
+        $this->setUser(0);
+        access::reset_caches();
+        $before = $DB->perf_get_reads();
+        $this->assertCount(2, access::filter_courses_public($small));
+        $smallreads = $DB->perf_get_reads() - $before;
+
+        access::reset_caches();
+        $before = $DB->perf_get_reads();
+        $this->assertCount(200, access::filter_courses_public($large));
+        $largereads = $DB->perf_get_reads() - $before;
+
+        $this->assertSame($smallreads, $largereads, 'The anonymous filter must cost the same for 200 courses as for 2.');
+    }
+
+    /**
+     * A primed relationship is answered from memory, at the cost of the state lookup alone.
+     *
+     * The control is the whole test: the same call without the primer costs
+     * strictly more, so the measurement cannot pass by the relationship never
+     * being asked for at all.
+     *
+     * @return void
+     */
+    public function test_prime_relationships_answers_without_the_enrolment_statements(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $category = $generator->create_category();
+        $unlisted = $generator->create_course(['category' => $category->id]);
+        $listed = $generator->create_course(['category' => $category->id]);
+        $warmup = $generator->create_course(['category' => $category->id]);
+        $viewer = $generator->create_user();
+        $generator->enrol_user($viewer->id, $unlisted->id);
+        $this->set_course_state((int) $unlisted->id, discoverability::STATE_UNLISTED);
+
+        $this->setUser($viewer);
+        $unlisteditem = [(object) ['id' => (int) $unlisted->id, 'category' => (int) $category->id]];
+        $listeditem = [(object) ['id' => (int) $listed->id, 'category' => (int) $category->id]];
+
+        // Warm whatever core caches on first use, so the first measurement is not the one paying for it.
+        access::reset_caches();
+        access::filter_courses([(object) ['id' => (int) $warmup->id, 'category' => (int) $category->id]]);
+
+        access::reset_caches();
+        access::prime_relationships([(int) $unlisted->id]);
+        $before = $DB->perf_get_reads();
+        $this->assertCount(1, access::filter_courses($unlisteditem), 'The primed course must survive the filter.');
+        $primedreads = $DB->perf_get_reads() - $before;
+
+        access::reset_caches();
+        $before = $DB->perf_get_reads();
+        $this->assertCount(1, access::filter_courses($listeditem));
+        $listedreads = $DB->perf_get_reads() - $before;
+
+        access::reset_caches();
+        $before = $DB->perf_get_reads();
+        $this->assertCount(1, access::filter_courses($unlisteditem));
+        $unprimedreads = $DB->perf_get_reads() - $before;
+
+        $this->assertSame(
+            $listedreads,
+            $primedreads,
+            'A primed unlisted course must cost what a listed one costs: the state lookup and nothing else.'
+        );
+        $this->assertGreaterThan(
+            $primedreads,
+            $unprimedreads,
+            'Control: without the primer the same call really does read the enrolment tables.'
+        );
+    }
+
+    /**
+     * The primer is keyed by the viewer, and a reset drops it.
+     *
+     * @return void
+     */
+    public function test_prime_relationships_is_keyed_by_the_viewer_and_dropped_by_a_reset(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $category = $generator->create_category();
+        $course = $generator->create_course(['category' => $category->id]);
+        $this->set_category_unlisted((int) $category->id, true);
+
+        $first = $generator->create_user();
+        $second = $generator->create_user();
+        $item = [(object) ['id' => (int) $course->id, 'category' => (int) $category->id]];
+
+        $this->setUser($first);
+        access::reset_caches();
+        $this->assertCount(0, access::filter_courses($item), 'Precondition: the category term withholds it.');
+
+        access::prime_relationships([(int) $course->id]);
+        $this->assertCount(1, access::filter_courses($item), 'A primed relationship rescues it from the category term.');
+
+        // Deliberately no reset: the primer belongs to the viewer who supplied it.
+        $this->setUser($second);
+        $this->assertCount(
+            0,
+            access::filter_courses($item),
+            'The second viewer must have their own answer computed, never the first one\'s.'
+        );
+
+        // Control: the same primer for the second viewer keeps it, and a reset drops it again.
+        access::prime_relationships([], [(int) $course->id]);
+        $this->assertCount(1, access::filter_courses($item));
+        access::reset_caches();
+        $this->assertCount(0, access::filter_courses($item), 'reset_caches() drops what was primed.');
+    }
 }

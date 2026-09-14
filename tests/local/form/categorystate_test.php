@@ -104,21 +104,98 @@ final class categorystate_test extends \advanced_testcase {
     }
 
     /**
-     * The select offers exactly the two category states, and nothing else - never the
-     * course-side "Public" option, which this form has no third state to hold.
+     * A user who may change the state but may not publish the category.
+     *
+     * @param \core_course_category $category The category.
+     * @return \stdClass The user.
+     */
+    private function create_statemanager(\core_course_category $category): \stdClass {
+        $user = $this->getDataGenerator()->create_user();
+        $context = \core\context\coursecat::instance($category->id);
+        $roleid = $this->getDataGenerator()->create_role();
+        assign_capability(category_discoverability::CAPABILITY_MANAGE, CAP_ALLOW, $roleid, $context->id, true);
+        role_assign($roleid, $user->id, $context->id);
+        return $user;
+    }
+
+    /**
+     * The select offers the three category states to somebody who may publish.
      *
      * @return void
      */
-    public function test_the_select_has_exactly_the_two_states(): void {
+    public function test_the_select_offers_the_three_states_to_a_publisher(): void {
         $this->resetAfterTest();
         $this->setAdminUser();
         $category = $this->getDataGenerator()->create_category();
 
         $select = $this->select($this->render($category));
 
-        $this->assertSame(2, substr_count($select, '<option'), 'The select must offer exactly two options.');
+        $this->assertSame(3, substr_count($select, '<option'), 'The select must offer exactly three options.');
         $this->option_tag($select, category_discoverability::STATE_DEFAULT);
         $this->option_tag($select, category_discoverability::STATE_UNLISTED);
+        $this->option_tag($select, category_discoverability::STATE_PUBLIC);
+    }
+
+    /**
+     * The public option is offered on the publish capability, and on nothing else.
+     *
+     * @return void
+     */
+    public function test_the_public_option_is_absent_without_the_publish_capability(): void {
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $statemanager = $this->create_statemanager($category);
+
+        $this->setUser($statemanager);
+        $select = $this->select($this->render($category));
+        $this->assertSame(2, substr_count($select, '<option'), 'Only the two states this user may set.');
+        $this->assertSame(
+            0,
+            preg_match('~<option[^>]*value="' . category_discoverability::STATE_PUBLIC . '"~', $select),
+            'The public option must not be offered to somebody who may not publish.'
+        );
+
+        // Control: the same category, the same form, rendered for somebody who may publish.
+        $this->setAdminUser();
+        $select = $this->select($this->render($category));
+        $this->option_tag($select, category_discoverability::STATE_PUBLIC);
+    }
+
+    /**
+     * A public category freezes the select for an editor who may not publish, value and all.
+     *
+     * @return void
+     */
+    public function test_a_public_category_freezes_the_select_for_an_editor_who_may_not_publish(): void {
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $statemanager = $this->create_statemanager($category);
+        $this->setAdminUser();
+        category_discoverability::set_state((int) $category->id, category_discoverability::STATE_PUBLIC);
+
+        $this->setUser($statemanager);
+        $html = $this->render($category);
+
+        $this->assertSame(
+            0,
+            preg_match('~<select[^>]*name="state"~', $html),
+            'A frozen control is not a select any more.'
+        );
+        $this->assertSame(
+            1,
+            preg_match('~<input[^>]*name="state"[^>]*>~', $html, $matches),
+            'The frozen value must still be submitted through a hidden input.'
+        );
+        $this->assertStringContainsString('type="hidden"', $matches[0]);
+        $this->assertStringContainsString('value="' . category_discoverability::STATE_PUBLIC . '"', $matches[0]);
+
+        // Control: a manager who may publish gets the same category as a live select.
+        $this->setAdminUser();
+        $select = $this->select($this->render($category));
+        $this->assertStringContainsString(
+            'selected',
+            $this->option_tag($select, category_discoverability::STATE_PUBLIC)
+        );
     }
 
     /**
