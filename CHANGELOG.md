@@ -172,6 +172,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Retiring the `unlisted` custom field left the files of its description behind.** The upgrade
+  deleted the field with plain deletes and skipped the cleanup core does for a field's description
+  file area, so any file embedded in that description stayed orphaned. The upgrade now deletes that
+  file area before the field.
+
 - **A course whose enrolment places had been freed by expiry still showed as closed.** The check
   for "this course is full" was re-implemented here rather than asked of `enrol_apply`, and that
   copy counted enrolments whose period had already run out. Since the plugin changed its own
