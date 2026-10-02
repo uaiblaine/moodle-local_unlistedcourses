@@ -19,3 +19,4 @@
 /docs                 export-ignore
 /mutations            export-ignore
 /phpcs.xml            export-ignore
+/.mdlshield          export-ignore
