@@ -190,6 +190,37 @@ final class legacy_field_test extends \advanced_testcase {
     }
 
     /**
+     * remove() deletes the files embedded in the retired field's description, and only those.
+     *
+     * @return void
+     */
+    public function test_remove_deletes_the_description_files_of_the_retired_field_only(): void {
+        $this->resetAfterTest();
+        $unlisted = $this->create_field($this->create_category('Course visibility'), legacy_field::SHORTNAME, 'checkbox');
+        $other = $this->create_field($this->create_category('Hotsite'), 'hotsite_modelo', 'checkbox');
+        $fs = get_file_storage();
+        $record = [
+            'contextid' => \context_system::instance()->id,
+            'component' => 'core_customfield',
+            'filearea' => 'description',
+            'filepath' => '/',
+            'filename' => 'embedded.txt',
+        ];
+        $fs->create_file_from_string($record + ['itemid' => $unlisted->get('id')], 'retired');
+        $fs->create_file_from_string($record + ['itemid' => $other->get('id')], 'kept');
+
+        // Precondition: both files exist before the call.
+        $this->assertFalse($fs->is_area_empty($record['contextid'], 'core_customfield', 'description', $unlisted->get('id')));
+        $this->assertFalse($fs->is_area_empty($record['contextid'], 'core_customfield', 'description', $other->get('id')));
+
+        legacy_field::remove();
+
+        $this->assertTrue($fs->is_area_empty($record['contextid'], 'core_customfield', 'description', $unlisted->get('id')));
+        // Control: a description file on an unrelated field survives.
+        $this->assertFalse($fs->is_area_empty($record['contextid'], 'core_customfield', 'description', $other->get('id')));
+    }
+
+    /**
      * A category that still holds another field survives remove().
      *
      * @return void

@@ -139,13 +139,13 @@ class legacy_field {
     }
 
     /**
-     * Delete the field, its data, and its category when nothing else is left in it.
+     * Delete the field, its data, its description files and its category when nothing else is left in it.
      *
-     * Plain deletes, on purpose: the customfield API's own delete path is
-     * built for a request with an acting user, and the course handler's
-     * cache reset is test-only code that throws during an upgrade. The
-     * handler memoises its field list per request, and this runs inside the
-     * upgrade request, where nobody reads it afterwards.
+     * Plain deletes, so no field_deleted event fires: the customfield API's
+     * delete path would, and an upgrade has no acting user to attribute it
+     * to. The tables touched match what core's field_controller::delete()
+     * removes, plus the field's description file area, which core clears in
+     * api::delete_field_configuration() and which raw deletes would orphan.
      *
      * @return void
      */
@@ -154,6 +154,12 @@ class legacy_field {
 
         $field = self::find();
         if ($field) {
+            get_file_storage()->delete_area_files(
+                \context_system::instance()->id,
+                'core_customfield',
+                'description',
+                $field->id
+            );
             $DB->delete_records('customfield_data', ['fieldid' => $field->id]);
             $DB->delete_records('customfield_field', ['id' => $field->id]);
             if (!$DB->record_exists('customfield_field', ['categoryid' => $field->categoryid])) {
