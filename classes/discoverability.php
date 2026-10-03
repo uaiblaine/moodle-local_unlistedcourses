@@ -471,10 +471,11 @@ class discoverability {
     }
 
     /**
-     * Drop the state of a course that is being deleted.
+     * Drop the state of a course core has deleted.
      *
-     * Called from the before_course_deleted hook. No capability and no event:
-     * the course is going away, and core's own deletion is the audited act.
+     * Called from the course_deleted observer, {@see observer::course_deleted()}, which says why
+     * it is not the before_course_deleted hook. No capability and no event: the course is gone,
+     * and core's own deletion is the audited act.
      *
      * @param int $courseid The course id.
      * @return void
