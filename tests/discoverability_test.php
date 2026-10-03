@@ -408,7 +408,7 @@ final class discoverability_test extends \advanced_testcase {
     }
 
     /**
-     * Deleting a course drops its row, through the before_course_deleted hook.
+     * Deleting a course drops its row, through the course_deleted observer.
      *
      * @return void
      */

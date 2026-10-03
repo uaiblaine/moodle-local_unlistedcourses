@@ -6,12 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-Version `2026100500`, release `v5.3-r1`, `MATURITY_ALPHA`: the Moodle 5.3 branch
-(`MOODLE_503_STABLE`), numbered in the 5.3 namespace (`20261005XX`, the core version 5.3.0
-shipped with). It is the 5.2 code unchanged apart from `version.php`, the single CI job against
-core `MOODLE_503_STABLE` and the README compatibility line. Known gap before a stable release:
-with asynchronous course deletion on, `before_course_deleted` runs when the deletion is
-requested, so a course can be listed again until the cron deletes it.
+Version `2026100501`, `MATURITY_STABLE`: the Moodle 5.3 branch (`MOODLE_503_STABLE`), numbered in
+the 5.3 namespace (`20261005XX`, the core version 5.3.0 shipped with). It is the 5.2 code with its
+own `version.php`, the single CI job against core `MOODLE_503_STABLE` and the README compatibility
+line. The asynchronous-deletion gap that kept it alpha is closed by the change below, and a test
+that runs the real asynchronous path pins it.
+
+### Changed
+
+- **An enrolment that starts later is a relationship with the course.** A user enrolled with a
+  start date still ahead (a manual enrolment scheduled by an administrator, say) is not "enrolled"
+  to core until that date, which used to ghost an unlisted course for exactly the people who were
+  told they belong to it. The relationship term now also counts an active row on an enabled
+  instance whose `timestart` is ahead. A suspended future row, one on a disabled instance and an
+  expired row still count for nothing.
+- **`access::classify_enrolment()` and `access::get_enrolment_state()`** give a caller the rule
+  and the dates: the type (`enrolled`, `scheduled`, `pending`, `none`) and the row's start and end
+  dates. A theme that reads the enrolment rows itself calls the pure function on them, so the
+  rule has one owner; `get_enrolment_state($courseid)` is the one-statement form for a page that
+  holds no rows. `prime_relationships()` takes a third argument for scheduled courses.
+- **A course's state row is dropped when core has deleted the course, not when the deletion is
+  requested.** The `before_course_deleted` hook is replaced by an observer of
+  `\core\event\course_deleted` (`db/events.php`). Core runs the hook once, when a deletion is
+  requested, and does not run it again when the cron performs an asynchronous deletion, so a
+  course whose deletion was queued lost its state at once and kept it lost if the deletion never
+  finished.
 
 ## v5.2-r1 (2026042000) - 2026-10-02
 

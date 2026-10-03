@@ -15,7 +15,7 @@
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Unlisted courses - Version file
+ * Course discoverability - Event observers registration
  *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine
@@ -24,9 +24,9 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->component = 'local_unlistedcourses';
-$plugin->version = 2026100501;
-$plugin->release = 'v5.3-r1';
-$plugin->requires = 2026100500;
-$plugin->supported = [503, 503];
-$plugin->maturity = MATURITY_STABLE;
+$observers = [
+    [
+        'eventname' => '\\core\\event\\course_deleted',
+        'callback' => '\\local_unlistedcourses\\observer::course_deleted',
+    ],
+];
