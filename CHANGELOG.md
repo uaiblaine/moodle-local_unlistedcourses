@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+Version `2026042001`.
+
+### Changed
+
+- **An enrolment that starts later is a relationship with the course.** A user enrolled with a
+  start date still ahead (a manual enrolment scheduled by an administrator, say) is not "enrolled"
+  to core until that date, which used to ghost an unlisted course for exactly the people who were
+  told they belong to it. The relationship term now also counts an active row on an enabled
+  instance whose `timestart` is ahead. A suspended future row, one on a disabled instance and an
+  expired row still count for nothing.
+- **`access::classify_enrolment()` and `access::get_enrolment_state()`** give a caller the rule
+  and the dates: the type (`enrolled`, `scheduled`, `pending`, `none`) and the row's start and end
+  dates. A theme that reads the enrolment rows itself calls the pure function on them, so the
+  rule has one owner; `get_enrolment_state($courseid)` is the one-statement form for a page that
+  holds no rows. `prime_relationships()` takes a third argument for scheduled courses.
+- **A course's state row is dropped when core has deleted the course, not when the deletion is
+  requested.** The `before_course_deleted` hook is replaced by an observer of
+  `\core\event\course_deleted` (`db/events.php`). Core runs the hook once, when a deletion is
+  requested, and does not run it again when the cron performs an asynchronous deletion, so a
+  course whose deletion was queued lost its state at once and kept it lost if the deletion never
+  finished.
+
 ## v5.2-r1 (2026042000) - 2026-10-02
 
 First published release, for Moodle 5.2 only (`MATURITY_STABLE`). The plugin now numbers its

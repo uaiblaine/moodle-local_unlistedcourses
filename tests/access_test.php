@@ -25,6 +25,7 @@
 namespace local_unlistedcourses;
 
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Tests for the discoverability predicate.
@@ -572,6 +573,206 @@ final class access_test extends \advanced_testcase {
 
         $this->setUser(0);
         $this->assertNull($method->invoke(null, (int) $course->id), 'A visitor must be refused before any enrol plugin is asked.');
+    }
+
+    /**
+     * Rows and the relationship classify_enrolment() gives them, judged at a fixed time.
+     *
+     * @return array Name => [status, timestart, timeend, enrol, instancestatus, expected type, startsat, endsat].
+     */
+    public static function enrolment_row_provider(): array {
+        $now = 1000000;
+        $on = ENROL_USER_ACTIVE;
+        $off = ENROL_USER_SUSPENDED;
+        $enabled = ENROL_INSTANCE_ENABLED;
+        $disabled = ENROL_INSTANCE_DISABLED;
+        $e = access::RELATIONSHIP_ENROLLED;
+        $s = access::RELATIONSHIP_SCHEDULED;
+        $p = access::RELATIONSHIP_PENDING;
+        $n = access::RELATIONSHIP_NONE;
+        return [
+            'open-ended and started' => [$on, 0, 0, 'manual', $enabled, $e, 0, 0],
+            'inside its window' => [$on, $now - 10, $now + 10, 'manual', $enabled, $e, $now - 10, $now + 10],
+            'starting right now' => [$on, $now, 0, 'manual', $enabled, $e, $now, 0],
+            'start date ahead' => [$on, $now + 50, 0, 'manual', $enabled, $s, $now + 50, 0],
+            'start date ahead with an end' => [$on, $now + 50, $now + 90, 'self', $enabled, $s, $now + 50, $now + 90],
+            'expired' => [$on, $now - 90, $now - 10, 'manual', $enabled, $n, 0, 0],
+            'ends right now' => [$on, $now - 90, $now, 'manual', $enabled, $n, 0, 0],
+            'end before start' => [$on, $now + 50, $now + 10, 'manual', $enabled, $n, 0, 0],
+            'disabled instance, started' => [$on, 0, 0, 'manual', $disabled, $n, 0, 0],
+            'disabled instance, start ahead' => [$on, $now + 50, 0, 'manual', $disabled, $n, 0, 0],
+            'suspended, start ahead' => [$off, $now + 50, 0, 'manual', $enabled, $n, 0, 0],
+            'suspended manual' => [$off, 0, 0, 'manual', $enabled, $n, 0, 0],
+            'suspended self' => [$off, 0, 0, 'self', $enabled, $n, 0, 0],
+            'waiting application' => [$off, 0, 0, 'apply', $enabled, $p, 0, 0],
+            'approved application, started' => [$on, 0, 0, 'apply', $enabled, $e, 0, 0],
+        ];
+    }
+
+    /**
+     * classify_enrolment() is the one rule that turns an enrolment row into a relationship.
+     *
+     * @param int $status The user_enrolments status.
+     * @param int $timestart The start date.
+     * @param int $timeend The end date.
+     * @param string $enrol The enrol plugin name.
+     * @param int $instancestatus The instance status.
+     * @param string $type The expected relationship.
+     * @param int $startsat The expected start date.
+     * @param int $endsat The expected end date.
+     * @return void
+     */
+    #[DataProvider('enrolment_row_provider')]
+    public function test_classify_enrolment(
+        int $status,
+        int $timestart,
+        int $timeend,
+        string $enrol,
+        int $instancestatus,
+        string $type,
+        int $startsat,
+        int $endsat
+    ): void {
+        $row = (object) [
+            'status' => $status,
+            'timestart' => $timestart,
+            'timeend' => $timeend,
+            'enrol' => $enrol,
+            'instancestatus' => $instancestatus,
+        ];
+
+        $this->assertSame(
+            ['type' => $type, 'startsat' => $startsat, 'endsat' => $endsat],
+            access::classify_enrolment($row, 1000000)
+        );
+    }
+
+    /**
+     * An enrolment that starts later ties the user to the course now.
+     *
+     * Core does not call such a user enrolled until the start date, but an administrator decided
+     * they take part, so an unlisted course must not be ghosted for them in the meantime. The
+     * rows that must not count are the controls: a suspended or expired one, one on a disabled
+     * instance, and a plain outsider, all in the same run so the predicate demonstrably ran.
+     *
+     * @return void
+     */
+    public function test_an_enrolment_that_starts_later_keeps_an_unlisted_course_discoverable(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $course = $generator->create_course();
+        // A cohort gate nobody passes, so that can_enrol() cannot be what keeps the course visible.
+        $this->add_self_enrol($course, (int) $generator->create_cohort()->id);
+        $this->set_unlisted((int) $course->id, true);
+
+        $start = time() + 3 * DAYSECS;
+        $scheduled = $generator->create_user();
+        $generator->enrol_user($scheduled->id, $course->id, 'student', 'manual', $start, 0);
+
+        $this->setUser($scheduled);
+        access::reset_caches();
+        $this->assertFalse(
+            is_enrolled(\core\context\course::instance($course->id), $scheduled, '', true),
+            'Precondition: core does not call a user whose start date is ahead enrolled.'
+        );
+        $this->assertTrue(
+            access::is_course_discoverable((int) $course->id),
+            'A user enrolled from a later date must keep the course discoverable.'
+        );
+        $this->assertSame(
+            ['type' => access::RELATIONSHIP_SCHEDULED, 'startsat' => $start, 'endsat' => 0],
+            access::get_enrolment_state((int) $course->id)
+        );
+
+        // Control: a suspended future enrolment is a decision already taken.
+        $suspended = $generator->create_user();
+        $generator->enrol_user($suspended->id, $course->id, 'student', 'manual', $start, 0, ENROL_USER_SUSPENDED);
+        $this->setUser($suspended);
+        access::reset_caches();
+        $this->assertFalse(access::is_course_discoverable((int) $course->id), 'A suspended enrolment does not count.');
+        $this->assertSame(access::RELATIONSHIP_NONE, access::get_enrolment_state((int) $course->id)['type']);
+
+        // Control: an enrolment that ended before it was ever active.
+        $expired = $generator->create_user();
+        $generator->enrol_user($expired->id, $course->id, 'student', 'manual', time() - 2 * DAYSECS, time() - DAYSECS);
+        $this->setUser($expired);
+        access::reset_caches();
+        $this->assertFalse(access::is_course_discoverable((int) $course->id), 'An expired enrolment does not count.');
+
+        // Control: a plain outsider.
+        $this->setUser($generator->create_user());
+        access::reset_caches();
+        $this->assertFalse(access::is_course_discoverable((int) $course->id), 'Control: an outsider is refused.');
+
+        // Control: the scheduled user loses it when the instance is disabled.
+        $manual = $DB->get_record('enrol', ['courseid' => $course->id, 'enrol' => 'manual'], '*', MUST_EXIST);
+        $DB->set_field('enrol', 'status', ENROL_INSTANCE_DISABLED, ['id' => $manual->id]);
+        $this->setUser($scheduled);
+        access::reset_caches();
+        $this->assertFalse(access::is_course_discoverable((int) $course->id), 'A disabled instance does not count.');
+    }
+
+    /**
+     * With several rows the strongest relationship wins, and a scheduled one reports its earliest start.
+     *
+     * @return void
+     */
+    public function test_get_enrolment_state_picks_the_strongest_row(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $course = $generator->create_course();
+        $self = $this->add_self_enrol($course, 0);
+
+        $user = $generator->create_user();
+        $later = time() + 5 * DAYSECS;
+        $sooner = time() + 2 * DAYSECS;
+        $generator->enrol_user($user->id, $course->id, 'student', 'manual', $later, 0);
+        enrol_get_plugin('self')->enrol_user($self, $user->id, null, $sooner, 0);
+
+        $this->setUser($user);
+        access::reset_caches();
+        $state = access::get_enrolment_state((int) $course->id);
+        $this->assertSame(access::RELATIONSHIP_SCHEDULED, $state['type']);
+        $this->assertSame($sooner, $state['startsat'], 'The earliest start date is the one a user waits for.');
+
+        // An active row beats the scheduled ones.
+        $generator->enrol_user($user->id, $course->id, 'student', 'manual', time() - DAYSECS, 0);
+        access::reset_caches();
+        $this->assertSame(access::RELATIONSHIP_ENROLLED, access::get_enrolment_state((int) $course->id)['type']);
+
+        // A visitor and a guest have none, and the site course has no rows.
+        $this->setGuestUser();
+        access::reset_caches();
+        $this->assertSame(access::RELATIONSHIP_NONE, access::get_enrolment_state((int) $course->id)['type']);
+        $this->setUser($user);
+        access::reset_caches();
+        $this->assertSame(access::RELATIONSHIP_NONE, access::get_enrolment_state(SITEID)['type']);
+    }
+
+    /**
+     * A primed scheduled course answers as a relationship without asking the database.
+     *
+     * @return void
+     */
+    public function test_prime_relationships_accepts_scheduled_courses(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $course = $generator->create_course();
+        $control = $generator->create_course();
+        $this->add_self_enrol($course, (int) $generator->create_cohort()->id);
+        $this->add_self_enrol($control, (int) $generator->create_cohort()->id);
+        $this->set_unlisted((int) $course->id, true);
+        $this->set_unlisted((int) $control->id, true);
+
+        $this->setUser($generator->create_user());
+        access::reset_caches();
+        access::prime_relationships([], [], [(int) $course->id]);
+
+        $this->assertTrue(access::is_course_discoverable((int) $course->id), 'The primed scheduled course is a relationship.');
+        $this->assertFalse(access::is_course_discoverable((int) $control->id), 'Control: an unprimed course is not.');
     }
 
     /**

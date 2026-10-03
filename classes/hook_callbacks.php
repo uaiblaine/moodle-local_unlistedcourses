@@ -27,7 +27,7 @@ namespace local_unlistedcourses;
 use local_unlistedcourses\local\courseform;
 
 /**
- * Hook callbacks: the course form control, its persistence, and course deletion.
+ * Hook callbacks: the course form control and its persistence.
  *
  * Thin on purpose. The form logic lives in {@see courseform} so it can be
  * tested against a bare form, and the persistence is one call into
@@ -60,15 +60,5 @@ class hook_callbacks {
      */
     public static function after_form_submission(\core_course\hook\after_form_submission $hook): void {
         courseform::save($hook->get_data());
-    }
-
-    /**
-     * Drop the state row of a course that is being deleted.
-     *
-     * @param \core_course\hook\before_course_deleted $hook The hook.
-     * @return void
-     */
-    public static function before_course_deleted(\core_course\hook\before_course_deleted $hook): void {
-        discoverability::on_course_deleted((int) $hook->course->id);
     }
 }

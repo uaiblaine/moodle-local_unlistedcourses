@@ -35,9 +35,4 @@ $callbacks = [
         'callback' => \local_unlistedcourses\hook_callbacks::class . '::after_form_submission',
         'priority' => 0,
     ],
-    [
-        'hook' => \core_course\hook\before_course_deleted::class,
-        'callback' => \local_unlistedcourses\hook_callbacks::class . '::before_course_deleted',
-        'priority' => 0,
-    ],
 ];
