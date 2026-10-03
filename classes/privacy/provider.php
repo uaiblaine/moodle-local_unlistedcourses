@@ -37,12 +37,12 @@ use local_unlistedcourses\discoverability;
 /**
  * Privacy provider.
  *
- * The two state tables record WHO last changed a course's or a category's
+ * The two state tables record who last changed a course's or a category's
  * state, which is the only personal data the plugin holds. The state itself
  * is course or category configuration, not the user's data, so a deletion
  * request detaches the user from the row (usermodified becomes 0) and leaves
- * the state in place - removing the row would un-hide or un-publish a course,
- * or un-hide a category, as a side effect of somebody leaving the site.
+ * the state in place - removing the row would un-hide or un-publish a course
+ * or a category as a side effect of somebody leaving the site.
  *
  * Each table is keyed to one context level - courses to the course context,
  * categories to the category context - and every method resolves the table

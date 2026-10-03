@@ -29,14 +29,13 @@ use local_unlistedcourses\discoverability;
 /**
  * Adds the discoverability select to the course settings form and reads it back.
  *
- * The control mirrors core's own "Course visibility" select: it sits right
- * after it, and it is offered to the same people (moodle/course:visibility).
- * The public option is added only for a user who may publish - except when
- * the course is ALREADY public, in which case the control is shown frozen
- * with the current value still submitting, through a persistent freeze
- * (a hidden input). Without that, an editor who may not publish would save an
- * unrelated change and silently un-publish the course, because a frozen
- * element that does not persist is exported as its default.
+ * The control mirrors core's own "Course visibility" select: it sits just
+ * before the start date, below that select, and it is offered to the people
+ * who may change it (moodle/course:visibility). The public option is added
+ * only for a user who may publish - except when the course is already public,
+ * in which case the control is shown frozen with the current value still
+ * submitting, through a persistent freeze (a hidden input), so an editor who
+ * may not publish can save an unrelated change without touching the state.
  *
  * None of this is a security boundary. The boundary is
  * {@see discoverability::set_state()}; this class only decides what the form
@@ -50,7 +49,7 @@ class courseform {
     /** @var string Name of the form element. */
     public const ELEMENT = 'local_unlistedcourses_state';
 
-    /** @var string The core element the control is inserted ahead of: the one after "Course visibility". */
+    /** @var string The core element the control is inserted ahead of: the start date, below "Course visibility". */
     private const ANCHOR = 'startdate';
 
     /** @var string The capability core requires to offer its own visibility select. */
@@ -73,7 +72,7 @@ class courseform {
         }
 
         /* For a course being created the context is the category's and the creator's own
-           role in the new course does not exist yet, so core asks what the creator WILL
+           role in the new course does not exist yet, so core asks what the creator will
            hold (guess_if_creator_will_have_course_capability(), the call behind its own
            visibility select). A plain has_capability() there would hide the control from
            a course creator, who gains moodle/course:visibility through creatornewroleid. */
@@ -106,9 +105,8 @@ class courseform {
         $mform->addHelpButton(self::ELEMENT, 'state', 'local_unlistedcourses');
 
         if ($current === discoverability::STATE_PUBLIC && !$canpublish) {
-            /* Persistent freeze: the value is displayed as text AND re-submitted through a
-               hidden input, so saving the form leaves the state exactly where it was. A
-               plain freeze would export the element's default instead. */
+            /* Persistent freeze: the value is displayed as text and re-submitted through a
+               hidden input, so saving the form leaves the state where it was. */
             $mform->getElement(self::ELEMENT)->setPersistantFreeze(true);
             $mform->freeze(self::ELEMENT);
         }

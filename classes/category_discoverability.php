@@ -34,43 +34,41 @@ use local_unlistedcourses\event\category_state_updated;
  * role in its context, or are staff - the predicate in category_access decides
  * that per viewer. PUBLIC is the opposite direction: the category's page may be
  * served to visitors who are not logged in, and inside it only the courses whose
- * OWN state is public are served to them. Only a category in a non-default state
+ * own state is public are served to them. Only a category in a non-default state
  * has a row; absence means listed.
  *
- * THE PUBLIC PREDICATE LIVES HERE, not in {@see category_access}, and the split
- * is the same one the course side already makes. Everything in category_access
- * is an answer about a VIEWER - a cohort membership, a role assignment, a
- * capability - and a category that is public is public for nobody in particular:
- * its answer is composed from the stored state and from rows of the category
- * tree, with no capability involved, exactly as {@see discoverability::is_public()}
- * composes the course one. Putting it beside the per-viewer predicate would
- * invite a viewer term into an answer that must not have one.
+ * The public predicate lives here, not in {@see category_access}, as on the
+ * course side. Everything in category_access is an answer about a viewer - a
+ * cohort membership, a role assignment, a capability - and a category that is
+ * public is public for nobody in particular: its answer is composed from the
+ * stored state and from rows of the category tree, with no capability involved,
+ * exactly as {@see discoverability::is_public()} composes the course one.
+ * Putting it beside the per-viewer predicate would invite a viewer term into an
+ * answer that must not have one.
  *
- * THE COMPOSITION RULE IS THE COURSE SIDE'S. A category is effectively public
+ * The composition rule is the course side's. A category is effectively public
  * when its own row says public, its own row is visible, every category on its
  * path exists and is visible, and no category on that path is unlisted.
- * Ancestors need NOT be public: a strict chain would force a site to publish its
+ * Ancestors need not be public: a strict chain would force a site to publish its
  * whole root to publish one programme area. An unlisted ancestor refuses it
  * because an anonymous visitor can satisfy none of the three terms that open an
  * unlisted category, so there is nobody the page could be served to.
  *
- * THE STATE IS A PROPERTY OF THE PATH, AND THIS CLASS HOLDS THE ROWS ONLY. A
- * category is effectively unlisted when it or any ancestor carries the state;
- * that walk belongs to the predicate, which reads course_categories.path, so
- * one row unlists a whole subtree and clearing a child's own row cannot
- * un-hide it. Here a category's state is its own row and nothing else.
+ * This class holds the rows only. A category is effectively unlisted when it
+ * or any ancestor carries the state; that walk belongs to the predicate, which
+ * reads course_categories.path, so one row unlists a whole subtree and clearing
+ * a child's own row cannot un-hide it. Here a category's state is its own row
+ * and nothing else.
  *
- * THE CAPABILITY CHECK LIVES IN set_state() AND NOWHERE ELSE, mirroring the
- * rule the course state already follows. The editing page checks it too, as
- * a courtesy, so nobody is shown a form their save will refuse - but the page
- * is one writer and this is the boundary. Every real transition is gated, in
- * both directions: unlike the course side, where four writers already sit
- * behind moodle/course:update, this state has exactly one writer and the
- * gate costs nothing.
+ * set_state() is the capability boundary, as on the course side. category.php
+ * checks the manage capability too, only so that nobody is shown a form their
+ * save will refuse. Every real transition is gated, in both directions: unlike
+ * the course side, where four writers already sit behind moodle/course:update,
+ * this state has one writer and the gate costs nothing.
  *
  * A call that changes nothing needs no capability and fires no event.
  *
- * NOTHING HERE IS CACHED BEYOND THE REQUEST, for the reason the course state
+ * Nothing here is cached beyond the request, for the reason the course state
  * gives: the answer feeds an access decision whose other half (cohort
  * membership, role assignments) is deliberately uncached.
  *
@@ -183,8 +181,8 @@ class category_discoverability {
      * Whether the category's own row says unlisted.
      *
      * This is the row only: an ancestor's state is not consulted here, and
-     * whether the CURRENT user may still discover an unlisted category is the
-     * predicate's question, not this one.
+     * whether the current user may still discover an unlisted category is
+     * {@see category_access::is_category_discoverable()}.
      *
      * @param int $categoryid The category id.
      * @return bool True when the category itself is in the unlisted state.
@@ -197,9 +195,9 @@ class category_discoverability {
      * The ids of every category whose own row says unlisted.
      *
      * One query per request, memoised. This is the empty-set fast path of the
-     * whole feature: when it returns nothing, no category is unlisted and the
-     * predicate answers "discoverable" with no further query. Sorted, so two
-     * calls in one request and two requests agree on the order.
+     * category predicate: when it returns nothing, no category is unlisted and
+     * the predicate answers "discoverable" with no further query. Sorted, so
+     * two calls in one request and two requests agree on the order.
      *
      * @return int[] Category ids, ascending.
      */
@@ -219,7 +217,7 @@ class category_discoverability {
      * The ids of every category whose own row says public.
      *
      * One query per request, memoised and sorted, the twin of
-     * {@see unlisted_ids()}. This is the OWN state of each category and nothing
+     * {@see unlisted_ids()}. This is the own state of each category and nothing
      * else: whether one of them is effectively public is {@see is_public()}.
      *
      * @return int[] Category ids, ascending.
@@ -260,7 +258,7 @@ class category_discoverability {
      * read per category, which is what lets a listing ask about a whole page at
      * once.
      *
-     * NON-THROWING FOR AN ID THAT IS NOT THERE. The callers are the anonymous
+     * Non-throwing for an id that is not there. The callers are the anonymous
      * surface, where the id came from a visitor, so a missing category is an
      * answer - false - and never an exception: every read is a plain one, no
      * MUST_EXIST anywhere.
@@ -368,7 +366,7 @@ class category_discoverability {
      * Whether the categories above this one let it be public.
      *
      * Every ancestor must exist and be visible, and none of them may be
-     * unlisted. The category's OWN row is not read here - its visibility is a
+     * unlisted. The category's own row is not read here - its visibility is a
      * term of its own in {@see are_public()}, and its own state cannot be
      * unlisted and public at once.
      *
@@ -404,10 +402,11 @@ class category_discoverability {
     /**
      * Set the state of a category.
      *
-     * The one place the manage capability is checked - see the class docblock
-     * for why it is here and not on the page. A call that does not change the
-     * state returns without checking anything and fires nothing. Every change
-     * fires {@see category_state_updated}.
+     * The capability boundary: the manage capability on every change, and the
+     * publish capability as well on a change that enters or leaves the public
+     * state - see the class docblock. A call that does not change the state
+     * returns without checking anything and fires nothing. Every change fires
+     * {@see category_state_updated}.
      *
      * @param int $categoryid The category id. Not the top level, which has no row to hold a state.
      * @param int $state One of the state constants.
@@ -485,9 +484,10 @@ class category_discoverability {
      * pre_course_category_delete_move plugin callbacks in lib.php, which core
      * invokes before the row disappears. No capability and no event: the
      * category is going away, and core's own deletion is the audited act.
-     * A deleted category's descendants are deleted or moved by core one by
-     * one, each through the same callback, so a subtree is cleaned by repeated
-     * invocation and nothing here walks it.
+     * Nothing here walks the subtree: core_course_category::delete_full()
+     * deletes each descendant through its own delete_full() call, which invokes
+     * the callback again, and delete_move() moves the children, which keep
+     * their state.
      *
      * @param int $categoryid The category id.
      * @return void

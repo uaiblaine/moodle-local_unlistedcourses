@@ -30,11 +30,10 @@ use PHPUnit\Framework\Attributes\CoversClass;
 /**
  * Tests for the "who sees this category" preview shown on the editing page.
  *
- * Every export goes through a FRESH \moodle_page built for the category being
- * previewed, never the shared global $PAGE: moodle_page::set_context() warns
- * once a non-system, non-course context is switched to a DIFFERENT context of
- * the same level, and several tests here export two or more categories in one
- * run.
+ * Every export goes through a fresh \moodle_page built for the category being
+ * previewed, never the shared global $PAGE: moodle_page::set_context() emits a
+ * debugging notice when a category context is replaced by a different one, and
+ * several tests here export two or more categories in one run.
  *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine
@@ -155,7 +154,7 @@ final class category_preview_test extends \advanced_testcase {
     }
 
     /**
-     * 'ancestorunlisted' follows an unlisted ANCESTOR, and excludes the category's own row.
+     * 'ancestorunlisted' follows an unlisted ancestor, and excludes the category's own row.
      *
      * @return void
      */
@@ -173,7 +172,7 @@ final class category_preview_test extends \advanced_testcase {
         $this->assertTrue($data['ancestorunlisted']);
         $this->assertFalse($data['unlisted'], 'The child itself must not read as unlisted through its own row.');
 
-        // Control: the child's OWN row is unlisted, but it no longer has an unlisted ancestor.
+        // Control: the child's own row is unlisted, but it no longer has an unlisted ancestor.
         category_discoverability::set_state((int) $parent->id, category_discoverability::STATE_DEFAULT);
         category_discoverability::set_state((int) $child->id, category_discoverability::STATE_UNLISTED);
         $data = $this->export($child, $childcontext);
@@ -182,7 +181,7 @@ final class category_preview_test extends \advanced_testcase {
     }
 
     /**
-     * Only cohorts whose context IS the category's own are exported; a system cohort and a
+     * Only cohorts whose context is the category's own are exported; a system cohort and a
      * parent-category cohort are both excluded.
      *
      * @return void
@@ -261,7 +260,7 @@ final class category_preview_test extends \advanced_testcase {
         $category = $this->getDataGenerator()->create_category();
         $context = \core\context\coursecat::instance($category->id);
 
-        // Assumption: the class's own page size is 100, per the implementation brief.
+        // One more cohort than fits on a page: the counts below assume category_preview::PERPAGE is 100.
         for ($i = 1; $i <= 101; $i++) {
             $this->create_cohort_at($context, sprintf('Cohort %03d', $i));
         }
@@ -272,7 +271,7 @@ final class category_preview_test extends \advanced_testcase {
     }
 
     /**
-     * Without moodle/cohort:view, no cohort is named at all - not even that one exists.
+     * Without moodle/cohort:view, no cohort is named or listed.
      * A manager, who holds it by default, gets the same category's cohorts back.
      *
      * @return void
@@ -314,7 +313,7 @@ final class category_preview_test extends \advanced_testcase {
     }
 
     /**
-     * A cohort named with a bare ampersand exports the PLAIN spelling: the template
+     * A cohort named with a bare ampersand exports the plain spelling: the template
      * double-stashes the name.
      *
      * @return void
@@ -334,7 +333,7 @@ final class category_preview_test extends \advanced_testcase {
     }
 
     /**
-     * 'roleholders' counts a role at the category ITSELF and at an ancestor CATEGORY, but
+     * 'roleholders' counts a role at the category itself and at an ancestor category, but
      * never a role at a course inside it.
      *
      * @return void
@@ -362,7 +361,7 @@ final class category_preview_test extends \advanced_testcase {
     }
 
     /**
-     * 'visiblecount' is the DISTINCT union of cohort members and role holders: a user who is
+     * 'visiblecount' is the distinct union of cohort members and role holders: a user who is
      * both counts once.
      *
      * @return void
@@ -394,9 +393,9 @@ final class category_preview_test extends \advanced_testcase {
     }
 
     /**
-     * With a category ABOVE this one unlisted too, 'visiblecount' is the INTERSECTION of
-     * the two eligible sets - the quantifier the access predicate applies - and the
-     * "visible to nobody" warning follows that number rather than this category's own.
+     * With a category above this one unlisted too, 'visiblecount' is the intersection of
+     * the two eligible sets - the quantifier category_access applies - and the "visible
+     * to nobody" warning follows that number rather than this category's own set.
      *
      * @return void
      */
@@ -433,7 +432,7 @@ final class category_preview_test extends \advanced_testcase {
         );
         $this->assertTrue($data['nobodywarning'], 'Nobody satisfies both categories, so the warning must fire.');
 
-        // Control: one person in BOTH cohorts is counted, and clears the warning.
+        // Control: one person in both cohorts is counted, and clears the warning.
         $both = $generator->create_user();
         $this->add_to_cohort((int) $parentcohort->id, (int) $both->id);
         $this->add_to_cohort((int) $childcohort->id, (int) $both->id);
@@ -442,7 +441,7 @@ final class category_preview_test extends \advanced_testcase {
         $this->assertSame(1, $data['visiblecount']);
         $this->assertFalse($data['nobodywarning'], 'A person eligible for both categories clears the warning.');
 
-        /* Control: a role at the unlisted ancestor satisfies BOTH terms at once - the
+        /* Control: a role at the unlisted ancestor satisfies both terms at once - the
            parent's own, and the child's, whose path includes the parent - so this raises
            the count by one person rather than by none. */
         $this->assign_role('manager', (int) $generator->create_user()->id, $parentcontext);
@@ -450,7 +449,7 @@ final class category_preview_test extends \advanced_testcase {
     }
 
     /**
-     * 'nobodywarning' is true only while the category is UNLISTED and nobody besides staff
+     * 'nobodywarning' is true only while the category is unlisted and nobody besides staff
      * would see it; a member clears it, and a listed category never shows it at all.
      *
      * @return void
@@ -501,8 +500,8 @@ final class category_preview_test extends \advanced_testcase {
      * A public category exports the public branch, and none of the cohort or role accounting.
      *
      * The control is the same category before it is published: the cohort it
-     * carries IS counted then, so the empty accounting afterwards is the public
-     * branch doing it and not an empty fixture.
+     * carries is counted then, so the empty accounting afterwards comes from the
+     * public branch and not from an empty fixture.
      *
      * @return void
      */
@@ -581,17 +580,14 @@ final class category_preview_test extends \advanced_testcase {
     /**
      * The public branch of the template renders well-formed markup, warnings and all.
      *
-     * THE STATIC GATE CANNOT SEE THIS BRANCH. The mustache lint renders a template
-     * against the one "Example context (json)" block in its docblock and validates the
-     * HTML that comes out; the two branches here are mutually exclusive, so whichever
-     * context the block carries, the other branch's markup is never parsed. The block
-     * carries the unlisted branch, which is the larger one, and this test is what stands
-     * in for the gate on the other: an unclosed div or a stray brace in the public panel
-     * would leave the fragment unparseable, and nothing else in the pipeline would say so.
+     * The mustache lint renders a template only against the "Example context (json)"
+     * block in its docblock. The two branches are mutually exclusive and the block carries
+     * the unlisted one, so the lint never parses the public branch's markup; this test
+     * stands in for it there: an unclosed or misnested element in the public panel makes
+     * the fragment unparseable and fails here.
      *
-     * The control is the unlisted branch rendered by the same assertion: it is the branch
-     * the lint does cover, so if the check could not fail it would have to pass there too
-     * for a reason that is not well-formedness.
+     * The unlisted branch, which the lint does validate, is rendered through the same
+     * assertion as a positive control: the check accepts markup the lint accepts.
      *
      * @return void
      */
@@ -624,8 +620,7 @@ final class category_preview_test extends \advanced_testcase {
         $this->assertStringContainsString(get_string('preview_theme', 'local_unlistedcourses'), $html);
         $this->assert_well_formed($html, 'The public panel with both warnings and the theme warning.');
 
-        /* Control: the branch the lint does cover passes the same assertion, so a check
-           that could never fail would have had to pass here for another reason. */
+        // Positive control: the unlisted branch, which the lint validates, passes the same check.
         category_discoverability::set_state((int) $child->id, category_discoverability::STATE_UNLISTED);
         $this->assert_well_formed($this->render($this->export($child, $context)), 'The unlisted branch.');
     }

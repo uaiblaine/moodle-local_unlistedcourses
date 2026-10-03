@@ -237,7 +237,7 @@ final class discoverability_test extends \advanced_testcase {
         $sink->close();
         $this->assertTrue(discoverability::is_public((int) $course->id));
 
-        // Control: the same user CHANGING the state is refused.
+        // Control: the same user changing the state is refused.
         $this->expectException(\required_capability_exception::class);
         discoverability::set_state((int) $course->id, discoverability::STATE_UNLISTED);
     }
@@ -504,14 +504,12 @@ final class discoverability_test extends \advanced_testcase {
     /**
      * are_public() over 200 courses costs what it costs over 2.
      *
-     * THE LARGE SET IS SPREAD OVER TWENTY CATEGORIES, and the small one sits in
-     * one, on purpose. All 202 courses in a single category would read alike
-     * under an implementation that batched per distinct CATEGORY rather than
-     * per request, because there would be one distinct category either way, and
-     * the equality would then hold for a reason other than the one asserted.
-     * Twenty categories against one separates the two: a per-category
-     * implementation pays twenty path lookups on the large set and one on the
-     * small, and the assertion fails as it should.
+     * The large set is spread over twenty categories and the small one sits in
+     * one, on purpose: with every course in a single category the reads would
+     * also be equal for an implementation that batched per distinct category
+     * rather than per request. Against twenty categories such an implementation
+     * pays twenty path lookups instead of one, and the assertion fails as it
+     * should.
      *
      * @return void
      */
@@ -592,15 +590,15 @@ final class discoverability_test extends \advanced_testcase {
     }
 
     /**
-     * The bulk join reads every course's own state in the caller's statement, and unknown values read as listed.
+     * The bulk join reads every course's own state in the caller's statement, and an unknown value comes back raw.
      *
      * Three courses, one per state, plus a fourth whose row holds a value no
      * state constant names (written straight into the table, as a broken
      * upgrade or a hand edit would): the column comes back 0, 1 and 2 for the
-     * first three and the raw value for the fourth, which is why the docblock
-     * tells an anonymous caller to test equality with STATE_PUBLIC and never
-     * inequality with STATE_UNLISTED - the same statement, compared both ways,
-     * shows the difference.
+     * first three and the raw value for the fourth. That is why
+     * {@see discoverability::state_sql()} tells an anonymous caller to test
+     * equality with STATE_PUBLIC and never inequality with STATE_UNLISTED; the
+     * same statement, compared both ways, shows the difference.
      */
     public function test_state_sql_reads_the_state_of_a_population_in_one_statement(): void {
         global $DB;

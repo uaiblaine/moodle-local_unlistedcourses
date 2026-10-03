@@ -25,16 +25,17 @@
 /**
  * Adds the discoverability state to course backups.
  *
- * Without this the state is lost on every course duplicate and restore -
- * silently, and in the un-hiding direction. Only the state travels; who set
- * it and when are stamped afresh by the restore.
+ * Without this the state is lost on every course duplicate and restore, and
+ * an unlisted course comes back listed. Only the state travels; who set it and
+ * when are stamped afresh by the restore.
  *
- * The element is written for EVERY course, a listed one included, even though
- * a listed course has no row: core processes course.xml only into a new
- * course or when "overwrite course configuration" is on, and in both cases it
- * rewrites every course setting from the backup. An absent element would
- * instead mean "keep whatever the target already has", so restoring a listed
- * course over an unlisted or public one would leave the stale state behind.
+ * The element is written for every course, a listed one included, even though
+ * a listed course has no row. Core processes course.xml only into a new course,
+ * when "overwrite course configuration" is on, or for a tool_uploadcourse
+ * template restore ({@see restore_course_task::build()}), and then rewrites the
+ * course settings from the backup. An absent element would instead mean "keep
+ * whatever the target already has", so restoring a listed course over an
+ * unlisted or public one would leave the stale state behind.
  *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine

@@ -576,7 +576,7 @@ final class category_discoverability_test extends \advanced_testcase {
             category_discoverability::get_state((int) $category->id)
         );
 
-        // Control: the same user CHANGING the state is refused, and the state stays put.
+        // Control: the same user changing the state is refused, and the state stays put.
         $refused = false;
         try {
             category_discoverability::set_state((int) $category->id, category_discoverability::STATE_DEFAULT);
@@ -592,7 +592,7 @@ final class category_discoverability_test extends \advanced_testcase {
     }
 
     /**
-     * A public category under a listed, visible parent is public; the six ways it stops being.
+     * A public category under a listed, visible parent is public, and each way it stops being one.
      *
      * Viewer-independent throughout: the assertions run with nobody logged in,
      * which is the surface the predicate exists for.
@@ -615,13 +615,13 @@ final class category_discoverability_test extends \advanced_testcase {
             'Precondition: a public leaf under a listed visible parent is public.'
         );
 
-        // An UNLISTED ancestor refuses it: an anonymous visitor can satisfy no term of that rule.
+        // An unlisted ancestor refuses it: an anonymous visitor can satisfy no term of that rule.
         $this->set_state_as_admin((int) $parent->id, category_discoverability::STATE_UNLISTED);
         $this->assertFalse(category_discoverability::is_public((int) $leaf->id));
         $this->set_state_as_admin((int) $parent->id, category_discoverability::STATE_DEFAULT);
         $this->assertTrue(category_discoverability::is_public((int) $leaf->id));
 
-        // A HIDDEN ancestor refuses it.
+        // A hidden ancestor refuses it.
         $DB->set_field('course_categories', 'visible', 0, ['id' => $parent->id]);
         category_discoverability::reset_caches();
         $this->assertFalse(category_discoverability::is_public((int) $leaf->id));
@@ -722,14 +722,11 @@ final class category_discoverability_test extends \advanced_testcase {
      * read, a path walk, a visibility lookup - is the only thing that could
      * make the larger set read more than the smaller one.
      *
-     * THE LARGE SET IS SPREAD OVER TWENTY PARENTS, and the small one sits under
-     * a single parent, on purpose. With every candidate under one shared parent
-     * the two calls would also read alike under an implementation that batched
-     * per DISTINCT ANCESTOR rather than per request, because there would be one
-     * distinct ancestor either way - the equality would hold for a reason that
-     * is not the one being asserted. Twenty parents against one makes the two
-     * explanations disagree: a per-ancestor implementation reads twenty path
-     * lookups here and one there, and the assertion fails as it should.
+     * The large set is spread over twenty parents and the small one sits under
+     * one, on purpose: with a single shared parent the reads would also be equal
+     * for an implementation that batched per distinct ancestor rather than per
+     * request. Against twenty parents such an implementation reads twenty path
+     * lookups instead of one, and the assertion fails as it should.
      *
      * @return void
      */

@@ -29,16 +29,17 @@ use PHPUnit\Framework\Attributes\CoversClass;
 /**
  * Tests for the category discoverability predicate.
  *
- * Every test that asserts a category is HIDDEN also asserts that some control
+ * Every test that asserts a category is hidden also asserts that some control
  * category, or some control user, is visible in the same run - without the
  * control a hidden-category assertion would pass just as happily against a
  * predicate that never ran at all.
  *
- * D1 (cohorts only at the unlisted category's own context, never an ancestor
- * or system), D2 (role assignments at the unlisted category or an ancestor
- * CATEGORY context, plus the moodle/category:viewhiddencategories escape) and
- * the AND rule over every unlisted category on a path are exercised here; the
- * course-level D12 split lives in {@see access_test} and the anonymous clamp
+ * Exercised here: cohorts count only at the unlisted category's own context,
+ * never an ancestor's or the system one; role assignments count at the
+ * unlisted category or an ancestor category context, plus the
+ * moodle/category:viewhiddencategories escape; and the AND rule over every
+ * unlisted category on a path. The course-level rule that the category term
+ * applies to listings only is in {@see access_test}, and the anonymous clamp
  * in {@see discoverability_test}.
  *
  * @package    local_unlistedcourses
@@ -98,7 +99,7 @@ final class category_access_test extends \advanced_testcase {
      * Create a cohort in the given context.
      *
      * @param \context $context The cohort's context.
-     * @param bool $visible Whether the cohort itself is visible (D10: must not matter to the predicate).
+     * @param bool $visible Whether the cohort itself is visible; the predicate must ignore it.
      * @return \stdClass The cohort record.
      */
     private function create_cohort_at(\context $context, bool $visible = true): \stdClass {
@@ -179,10 +180,7 @@ final class category_access_test extends \advanced_testcase {
         $member = $generator->create_user();
         $this->add_to_cohort((int) $cohort->id, (int) $member->id);
 
-        /* The guest is put in the gating cohort on purpose. Without it the refusal
-           below would be reached by the cohort term finding nothing, which is the
-           same answer the fail-closed guard gives and proves neither - the guard is
-           only observable when a guest DOES hold a membership and is refused anyway. */
+        // A member on purpose, so the guest's refusal can only come from the guard.
         $guest = guest_user();
         $this->add_to_cohort((int) $cohort->id, (int) $guest->id);
 
@@ -238,7 +236,7 @@ final class category_access_test extends \advanced_testcase {
     }
 
     /**
-     * A cohort at the system context grants nothing (D1).
+     * A cohort at the system context grants nothing.
      *
      * @return void
      */
@@ -309,14 +307,14 @@ final class category_access_test extends \advanced_testcase {
             'A cohort at an unrelated sibling category must not count.'
         );
 
-        // Control: a cohort at the unlisted category's OWN context unlocks its listed child too.
+        // Control: a cohort at the unlisted category's own context unlocks its listed child too.
         $this->setUser($atparent);
         category_access::reset_caches();
         $this->assertTrue(category_access::is_category_discoverable((int) $child->id));
     }
 
     /**
-     * An invisible cohort still grants access (D10).
+     * An invisible cohort still grants access.
      *
      * @return void
      */
@@ -411,12 +409,10 @@ final class category_access_test extends \advanced_testcase {
             'Control: a role at a child category of the unlisted one must not unlock the parent.'
         );
 
-        /* The same viewer must not reach the CHILD either, and this is the assertion
-           that pins the rule rather than restating it. The role has to sit at the
-           unlisted category or above IT - never merely somewhere on the path being
-           answered - so a role below it satisfies nothing. The pairing is the proof:
-           the role-at-the-category viewer above reads this very id as discoverable,
-           and this one must not. */
+        /* The same viewer must not reach the child either: the role has to sit at the
+           unlisted category or above it, never merely somewhere on the path being
+           answered. The viewer with a role at the unlisted category reads this same id
+           as discoverable, which is what makes this refusal meaningful. */
         $this->assertFalse(
             category_access::is_category_discoverable((int) $child->id),
             'A role below the unlisted category satisfies it for nothing, its own category included.'
@@ -424,7 +420,7 @@ final class category_access_test extends \advanced_testcase {
     }
 
     /**
-     * A bespoke system role with no category capability grants nothing (D2).
+     * A bespoke system role with no category capability grants nothing.
      *
      * @return void
      */
@@ -631,9 +627,10 @@ final class category_access_test extends \advanced_testcase {
     /**
      * The answer follows a bulk write to {cohort_members} that fires no event, once caches are reset.
      *
-     * tool_dynamic_cohorts writes cohort_members in bulk without firing
-     * cohort_member_added or cohort_member_removed, so the predicate must
-     * never rely on those events - only on reading the table fresh.
+     * tool_dynamic_cohorts, on a rule with bulk processing on, writes
+     * cohort_members directly without firing cohort_member_added or
+     * cohort_member_removed, so the predicate must never rely on those events -
+     * only on reading the table fresh.
      *
      * @return void
      */
@@ -737,7 +734,7 @@ final class category_access_test extends \advanced_testcase {
      * A role switch inside a course does not change the category answer.
      *
      * The raw role read (role_term) never consults a switch, and has_capability()
-     * at the category context only walks the category's OWN path upward - the
+     * at the category context only walks the category's own path upward - the
      * course the switch is registered against is a descendant, never one of the
      * paths checked, so the staff escape is unaffected too.
      *
