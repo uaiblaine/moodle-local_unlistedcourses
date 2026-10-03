@@ -177,9 +177,9 @@ the site.
 
 ## Requirements
 
-Moodle 5.2 (branch `MOODLE_502_STABLE`, release `v5.2-r1`). Moodle 5.3 is developed in alpha on the
-`MOODLE_503_dev` branch. Moodle 4.5 and 5.1 are not supported. Brazilian Portuguese and English
-language packs.
+Moodle 5.3 (in development; branch `MOODLE_503_dev`, alpha). Stable versions have their own
+branches: Moodle 5.2 is `MOODLE_502_STABLE`, release `v5.2-r1`. Moodle 4.5 and 5.1 are not
+supported. Brazilian Portuguese and English language packs.
 
 ## Installation
 
