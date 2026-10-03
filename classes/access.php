@@ -27,32 +27,28 @@ namespace local_unlistedcourses;
 /**
  * Decides whether the current user may discover a course.
  *
- * A course in the UNLISTED state ({@see discoverability}) is discoverable
- * only by someone who is actively enrolled, has an application pending, or
- * could enrol right now. Everyone else must not learn that it exists - so the
- * answer feeds course listings, the enrolment page and anything else that
- * would otherwise print its name. The other two states (listed, public) are
- * discoverable by anybody; whether a PUBLIC course may be served to a visitor
- * who is not logged in is {@see discoverability::is_public()}, not this, and
- * {@see filter_courses_public()} is the one method here that asks it - the
- * anonymous listing's filter, which reads no $USER at all.
+ * A course in the unlisted state ({@see discoverability}) is discoverable
+ * only by someone who is actively enrolled, has an application pending, is
+ * staff of the course, or could enrol right now. Everyone else must not learn
+ * that it exists, so the answer feeds course listings, the enrolment page and
+ * anything else that would otherwise print its name. The other two states
+ * (listed, public) are discoverable by anybody. Whether a public course may be
+ * served to a visitor who is not logged in is {@see discoverability::is_public()},
+ * not this; {@see filter_courses_public()} is the one method here that asks it,
+ * and it reads no $USER.
  *
- * CURRENT USER ONLY, and not by choice. The two predicates this class
- * delegates to both read the $USER global rather than accepting a user id:
- * enrol_self_plugin::can_self_enrol() resolves cohort membership through
- * $USER->id, and the fleet's enrol_apply fork does the same in allow_apply().
- * Passing a user id would mean reimplementing both, and a reimplementation
- * that drifts from the plugin it mirrors fails open. Tests switch users with
- * setUser() instead.
+ * Current user only: enrol_self_plugin::can_self_enrol() reads $USER for its
+ * cohort, existing-enrolment and capability checks and takes no user id, and a
+ * reimplementation for another user would fail open as soon as it drifted from
+ * the plugin. Tests switch users with setUser() instead.
  *
- * NOTHING HERE IS CACHED BEYOND THE REQUEST, deliberately. The answer depends
- * on cohort membership, and the fleet's tool_dynamic_cohorts writes
- * cohort_members in bulk WITHOUT firing cohort_member_added/removed - by its
- * own comment, "the bulk path deliberately skips" them. A cache invalidated
- * by those events would keep showing a course to someone who has just been
- * removed from the cohort that gated it, which is the failure this plugin
- * exists to prevent. The answer also depends on time(), through the
- * enrolment window each enrol plugin enforces.
+ * Nothing here is cached beyond the request. The answer depends on cohort
+ * membership, which can change without an event: tool_dynamic_cohorts, for
+ * one, writes cohort_members in bulk without firing cohort_member_added or
+ * cohort_member_removed, so a cache invalidated by those events would keep
+ * showing a course to someone just removed from the cohort that gated it. The
+ * answer also depends on time(), through the enrolment window each enrol
+ * plugin enforces.
  *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine
@@ -86,13 +82,12 @@ class access {
     /**
      * Whether the current user may discover this course.
      *
-     * THE COURSE'S OWN STATE AND NOTHING ELSE: an unlisted CATEGORY above it
-     * does not enter this answer. The split is deliberate. The theme's
-     * after_config guard ghosts /enrol/index.php, /course/info.php and the
-     * hotsite off this method, so a category rule added here would stop being a
-     * listing rule and become an enrolment block - somebody who was handed the
-     * link to a course inside an unlisted category, and who may enrol in it,
-     * must still be able to. The category term applies to listings only, in
+     * The course's own state only: an unlisted category above it does not enter
+     * this answer. Callers gate pages reached by link on it, such as
+     * /enrol/index.php and /course/info.php, so a category rule here would stop
+     * being a listing rule and become an enrolment block: somebody handed the
+     * link to a course inside an unlisted category, who may enrol in it, must
+     * still be able to. The category term applies to listings only, in
      * {@see filter_courses()}.
      *
      * @param int $courseid The course id.
@@ -106,21 +101,19 @@ class access {
     /**
      * Whether the current user may discover each of these courses.
      *
-     * Resolves the state for every id in ONE query and then evaluates
-     * eligibility only for the courses that are actually unlisted - which on a
-     * real site is a small minority of any listing, and is what keeps this
-     * affordable. The expensive half (one enrol_get_instances() plus one
-     * cohort_is_member() per instance, neither of which core caches anywhere)
-     * therefore runs over the marked subset, never over the whole page.
+     * Resolves the state for every id in one query and then evaluates
+     * eligibility only for the courses that are unlisted, normally a small
+     * minority of a listing. Eligibility is the expensive half - relationship
+     * queries, enrol_get_instances() and the per-instance enrol checks, none of
+     * them cached by core - so it never runs over the whole page.
      *
      * The course's own state alone, like {@see is_course_discoverable()} and
      * for the same reason: the category term belongs to {@see filter_courses()}.
      *
-     * Memoised per viewer AND course. An unlisted course's answer is entirely a
-     * property of the viewer - it ends in {@see eligible()}, which reads $USER
-     * through is_enrolled(), has_capability() and can_self_enrol() - so a memo
-     * keyed by the course alone would answer for whoever asked first, and
-     * setUser() and "log in as" switch users inside one request.
+     * Memoised per viewer and course. An unlisted course's answer is entirely a
+     * property of the viewer - {@see eligible()} reads $USER through
+     * is_enrolled(), has_capability() and can_self_enrol() - and setUser() and
+     * "log in as" switch users inside one request.
      *
      * @param array $courseids Course ids.
      * @return array Map of courseid => bool, in the order given.
@@ -175,20 +168,18 @@ class access {
      * around, and preserves the incoming keys so a caller can keep paginating
      * with them.
      *
-     * THIS IS THE ONE PLACE THE CATEGORY TERM APPLIES. A course whose category
+     * This is the one place the category term applies. A course whose category
      * is effectively unlisted is withheld here even when the course itself is
-     * listed - unlisting a category has to withhold what is inside it, or it
-     * withholds nothing. The same course is NOT withheld from
-     * {@see is_course_discoverable()}, which gates the enrolment page and the
-     * public landing page: a listing rule must not become an enrolment block.
+     * listed: unlisting a category has to withhold what is inside it. The same
+     * course is not withheld by {@see is_course_discoverable()}, which gates the
+     * enrolment page: a listing rule must not become an enrolment block.
      *
-     * Three relationships rescue a course from the category term - enrolled,
+     * Three relationships exempt a course from the category term - enrolled,
      * application pending, staff of the course - so the people who already work
-     * in a course keep it on their own listings whatever happens to the
-     * category above them. Being ABLE to enrol right now does not, and that is
-     * the point: an open self-enrolment instance is the normal case inside an
+     * in a course keep it on their own listings. Being able to enrol right now
+     * does not: an open self-enrolment instance is the normal case inside an
      * unlisted category, so honouring it here would leave the category rule
-     * withholding nothing at all.
+     * withholding nothing.
      *
      * @param array $courses Course records or list elements, any keys.
      * @return array The same array minus the courses this user must not discover.
@@ -224,27 +215,26 @@ class access {
     /**
      * Keep only the courses a visitor who is not logged in may be shown.
      *
-     * THE ONLY PREDICATE THE ANONYMOUS SHELL MAY USE, and the one that never
-     * consults the viewer: everything else in this class is an answer about
-     * $USER, and there is no $USER here. A course is kept when
+     * The only predicate a page served to such visitors may use, and the one
+     * method here that never consults the viewer: everything else in this class
+     * is an answer about $USER. A course is kept when
      * {@see discoverability::are_public()} says so - its own state public, the
      * course visible, every category on its path existing and visible, and no
-     * category on that path unlisted - and dropped otherwise, so the answer is
-     * the same for a visitor, for an administrator and for a crawler.
+     * category on that path unlisted - so the answer is the same for a visitor,
+     * an administrator and a crawler.
      *
      * A course whose own state is not public is dropped however public the
-     * category around it is. That is the whole rule: a course reaches the
-     * internet when, and only when, somebody holding the publish capability
-     * said so about that course. A listed course inside a public category has
-     * no anonymous page to offer - every link from it is a login wall - and an
-     * unlisted one is being withheld on purpose.
+     * category around it is: a course reaches the internet only when somebody
+     * holding the publish capability said so about that course. A listed course
+     * inside a public category has no anonymous page to offer, and an unlisted
+     * one is being withheld on purpose.
      *
      * Accepts anything with an ->id, which covers the course records and the
      * core_course_list_element objects a listing passes around, and preserves
-     * the incoming keys. A ->category or ->visible carried by the item is NOT
-     * read: this is the gate for the open web, and the two fields it would save
-     * are exactly the two a stale or hand-built list element gets wrong. The
-     * saving would be one statement per request in any case, not one per course.
+     * the incoming keys. A ->category or ->visible carried by the item is not
+     * read: those are the two fields a stale or hand-built list element gets
+     * wrong, and trusting them would save one statement per request, not one
+     * per course.
      *
      * @param array $courses Course records or list elements, any keys.
      * @return array The same array minus every course a visitor must not be shown.
@@ -274,21 +264,20 @@ class access {
     /**
      * Vouch for the current user's relationship with these courses, for this request.
      *
-     * A caller that has just read {@see \user_enrolments} for the whole of a
+     * A caller that has just read the {user_enrolments} table for a whole
      * subtree already knows which of its courses this user is enrolled in and
-     * which ones hold an application of theirs. Handing that map over here fills
-     * the relationship memo, so {@see filter_courses()} answers the category
-     * clamp for those courses out of memory instead of asking is_enrolled() and
-     * the pending-application query one course at a time - measured at roughly
-     * one statement per probed course, which is the one part of a listing that
-     * is not flat.
+     * which ones hold an application of theirs. Handing that over fills the
+     * relationship memo, so {@see filter_courses()} answers the category term
+     * for those courses from memory instead of running is_enrolled() and the
+     * pending-application query course by course - about one statement per
+     * course, the one part of a listing that is not flat.
      *
-     * ONLY TRUE IS EVER WRITTEN. The caller is vouching for a relationship it
+     * Only true is ever written. The caller is vouching for a relationship it
      * read itself; it is not authoritative about the absence of one, because
      * being staff of a course is a relationship too and no enrolment table
-     * carries it. An unprimed course is computed exactly as before.
+     * carries it. An unprimed course is computed as usual.
      *
-     * Keyed by the CURRENT viewer, like every other memo here: setUser() and
+     * Keyed by the current viewer, like every other memo here: setUser() and
      * "log in as" switch users inside one request, and what was primed for one
      * of them must never answer for the next. {@see reset_caches()} drops it.
      *
@@ -309,11 +298,11 @@ class access {
      * The category of each of these courses.
      *
      * Reads the category off the item when it carries one, which both a course
-     * record and a core_course_list_element do, and falls back to ONE query for
+     * record and a core_course_list_element do, and falls back to one query for
      * the rest - so a caller handing over real records costs nothing here, and
      * an object carrying only an id is still safe to pass. A course that no
-     * longer exists gets category 0, which no category owns, and is refused by
-     * the predicate unless the viewer has a relationship with the course.
+     * longer exists gets category 0, which has no row: while any category is
+     * unlisted, the category term then refuses it to everybody but a site admin.
      *
      * @param array $courses Course records or list elements.
      * @return array Map of courseid => categoryid.
@@ -341,12 +330,12 @@ class access {
     }
 
     /**
-     * Whether the current user is enrolled in, has applied to, or could join this course.
+     * Whether the current user is enrolled in, has applied to, is staff of, or could join this course.
      *
      * Every term but the last is a relationship the course already has with
      * this user, and they live in {@see has_course_relationship()} so the
-     * listing clamp in {@see filter_courses()} can ask for them on their own.
-     * "Could join right now" is the one term that clamp deliberately does not
+     * category term in {@see filter_courses()} can ask for them on their own.
+     * "Could join right now" is the one term that check deliberately does not
      * honour, which is why it stays here and nowhere else.
      *
      * @param int $courseid The course id.
@@ -357,10 +346,7 @@ class access {
             return true;
         }
 
-        /* viewer_context() carries the visitor and guest guard for this last term
-           as well, and it has to: can_self_enrol($instance, false) skips its own
-           guest check, so a guest would otherwise pass on any instance that
-           carries no cohort restriction. */
+        // The visitor and guest guard in viewer_context() covers this last term as well.
         return self::viewer_context($courseid) !== null && self::can_enrol($courseid);
     }
 
@@ -369,12 +355,10 @@ class access {
      *
      * Enrolled, staff of it, or an application pending - the three things that
      * keep a course on somebody's own listings whatever the category above it
-     * says. Deliberately NOT {@see can_enrol()}: being able to join a course is
-     * not a relationship with it, and letting it rescue one would leave the
-     * category rule withholding nothing, since an open self-enrolment instance
-     * is the normal case inside an unlisted category.
+     * says. Deliberately not {@see can_enrol()}: being able to join a course is
+     * not a relationship with it ({@see filter_courses()} says why that matters).
      *
-     * Memoised per viewer AND course: setUser() and "log in as" switch users
+     * Memoised per viewer and course: setUser() and "log in as" switch users
      * inside one request, and this answer is entirely a property of the viewer.
      *
      * @param int $courseid The course id.
@@ -413,19 +397,16 @@ class access {
             return true;
         }
 
-        /* Staff keep normal visibility. Without this, an unlisted course
-           disappears from the category listing of the very people who
-           administer it: a manager is not enrolled, is not in the gating
-           cohort, and can_self_enrol() answers no for them like anybody else -
-           so the course they are responsible for stops existing on screen, and
-           the site admin loses it too.
+        /* Staff keep the course. A manager is not enrolled and is usually not in
+           the gating cohort, so without this term an unlisted course would vanish
+           from the listings of the people who administer it.
 
            The two capabilities are core's own idioms for "may see this course
            without being enrolled": moodle/course:view is what is_viewing()
            tests and what managers hold, and moodle/course:viewhiddencourses is
-           the one core itself consults to decide who still sees a course that
-           has been hidden - held by teacher, editingteacher, coursecreator and
-           manager. Site admins pass both. */
+           the one core consults to decide who still sees a hidden course - held
+           by teacher, editingteacher, coursecreator and manager. Site admins
+           pass both. */
         if (is_viewing($context) || has_capability('moodle/course:viewhiddencourses', $context)) {
             return true;
         }
@@ -443,9 +424,10 @@ class access {
      * @return \core\context\course|null The context, or null for a visitor, a guest or a missing course.
      */
     private static function viewer_context(int $courseid): ?\core\context\course {
-        /* Fail closed for visitors and guests before consulting any enrol plugin:
-           can_self_enrol($instance, false) skips its own guest check, so a guest
-           would otherwise pass on any instance that carries no cohort restriction. */
+        /* Fail closed for visitors and guests before consulting any enrol plugin.
+           enrol_apply's allow_apply() checks neither guest status nor a capability, so
+           a guest would otherwise pass any apply instance without a cohort restriction,
+           and can_self_enrol($instance, false) skips its own guest check. */
         if (!isloggedin() || isguestuser()) {
             return null;
         }
@@ -469,11 +451,8 @@ class access {
     private static function has_pending_enrolment(int $courseid): bool {
         global $DB, $USER;
 
-        /* status <> ENROL_USER_ACTIVE, not "any row": an ACTIVE row is already
-           is_enrolled()'s answer, and matching it here would make this term
-           subsume that one - which is exactly how the first draft of this
-           method passed its tests while the enrolment short circuit it was
-           meant to complement went unheld by any of them. */
+        /* Inactive rows only, not any row: an active row is is_enrolled()'s to judge,
+           and matching it here as well would make this term subsume that check. */
         $sql = "SELECT 1
                   FROM {user_enrolments} ue
                   JOIN {enrol} e ON e.id = ue.enrolid
@@ -493,19 +472,20 @@ class access {
      * Dispatches per plugin rather than calling one shared method, because
      * there is no shared method to call: enrol_plugin::can_self_enrol() is
      * `return false` in the base class and only enrol_self overrides it in
-     * the whole of core, so asking every plugin through it would report "no"
-     * for enrol_apply and hide the course from the very people it is open to.
+     * core, so asking every plugin through it would report "no" for
+     * enrol_apply and hide the course from the people it is open to.
      *
-     * The enrol_apply branch mirrors theme_boost_union_fundaseg's own resolver:
-     * allow_apply() is guarded with is_callable() because the fork may not be
-     * installed, and the applicant cap lives OUTSIDE allow_apply() so it is
-     * checked separately.
+     * The enrol_apply branch mirrors
+     * {@see \theme_boost_union_fundaseg\local\hotsite\resolver}; keep the two in
+     * step. allow_apply() is guarded with is_callable() because an enrol_apply
+     * build without it may be installed, and the applicant limit is checked
+     * separately because allow_apply() does not check it.
      *
-     * Note that both predicates also enforce the enrolment window and the
-     * places limit, so an unlisted course disappears from the listing while
-     * its enrolment window is shut or once it is full. That is deliberate -
-     * it is the same answer core's own enrolment icons give - but it does
-     * make the listing time-dependent.
+     * Both branches also enforce the enrolment window and the places limit, so
+     * an unlisted course disappears from the listing while its enrolment window
+     * is shut or once it is full. That is deliberate - for enrol_self it is the
+     * answer core's own enrolment icons give - but it does make the listing
+     * time-dependent.
      *
      * @param int $courseid The course id.
      * @return bool True when at least one instance would accept this user.
@@ -548,22 +528,18 @@ class access {
     /**
      * Whether an enrol_apply instance has no place left.
      *
-     * Asks the plugin, rather than re-deriving the answer, because that definition
-     * changed and this adapter used to re-implement it. enrol_apply stopped counting EXPIRED
-     * enrolments against the cap: it ships expiredaction = ENROL_EXT_REMOVED_KEEP, under which
-     * core changes nothing when a period runs out, so a counted expired row made the cap a
-     * ratchet that only ever tightened. While the count was duplicated here, a course whose
-     * places had been freed by expiry still read as closed on this surface while enrol_apply's
-     * own pages offered the button and accepted the application.
+     * Asks the plugin rather than re-deriving the answer, so this stays in step with
+     * enrol_apply's own definition of full, which leaves expired enrolments out of the count.
+     * A copy here would drift, and a course whose places had been freed by expiry would read
+     * as closed on this surface while enrol_apply's own pages accepted the application.
      *
-     * It goes through the PLUGIN OBJECT and not \enrol_apply\local\capacity, and that is not
-     * a style choice: enrol_apply is an optional dependency here, so naming a class in its
-     * namespace is a reference the autoloader would have to resolve on a site without the
-     * plugin. is_callable() on the object is the same guard every allow_apply() call in this
-     * file already uses.
+     * It goes through the plugin object and not \enrol_apply\local\capacity: enrol_apply is an
+     * optional dependency here, so naming a class in its namespace is a reference the
+     * autoloader would have to resolve on a site without the plugin. is_callable() on the
+     * object is the same guard the allow_apply() call in {@see can_enrol()} uses.
      *
-     * The inline fallback is not dead code: it is what an enrol_apply build predating the
-     * method means by "full", and on such a build the unfiltered count IS the plugin's rule.
+     * The inline fallback is what an enrol_apply build without is_full() means by "full": on
+     * such a build the unfiltered count is the plugin's own rule.
      *
      * @param \stdClass $instance Enrol instance belonging to the apply plugin.
      * @param \enrol_plugin $plugin The apply plugin instance.

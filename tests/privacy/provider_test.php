@@ -102,7 +102,7 @@ final class provider_test extends provider_testcase {
      * Who is recorded as having last changed a course's state.
      *
      * @param int $courseid The course id.
-     * @return int The user id, 0 when detached.
+     * @return int The user id; 0 when detached, and also when the course has no row.
      */
     private function usermodified(int $courseid): int {
         global $DB;
@@ -114,7 +114,7 @@ final class provider_test extends provider_testcase {
      * Who is recorded as having last changed a category's state.
      *
      * @param int $categoryid The category id.
-     * @return int The user id, 0 when detached.
+     * @return int The user id; 0 when detached, and also when the category has no row.
      */
     private function category_usermodified(int $categoryid): int {
         global $DB;
@@ -175,7 +175,7 @@ final class provider_test extends provider_testcase {
         provider::get_users_in_context($userlist);
         $this->assertSame([(int) $managerb->id], array_map('intval', $userlist->get_userids()));
 
-        // A non-course context yields nobody.
+        // The system context holds no state, so it yields nobody.
         $userlist = new userlist(\core\context\system::instance(), self::COMPONENT);
         provider::get_users_in_context($userlist);
         $this->assertSame([], $userlist->get_userids());
@@ -258,7 +258,7 @@ final class provider_test extends provider_testcase {
         [$coursea, $courseb, $managera, $managerb] = $this->seed();
         $contexta = \core\context\course::instance($coursea->id);
 
-        // Somebody not in the list, in a different course, is the control.
+        // Control: managerb is in the list too, but only for this context, so their own course keeps its attribution.
         $userlist = new approved_userlist($contexta, self::COMPONENT, [$managera->id, $managerb->id]);
         provider::delete_data_for_users($userlist);
 
@@ -320,9 +320,10 @@ final class provider_test extends provider_testcase {
     /**
      * Each deletion detaches the user from the category row, keeps the state, and leaves the course rows alone.
      *
-     * The course rows are the control in every case, and a category-context
-     * deletion is the control for the course side: the two tables are keyed to
-     * different context levels, so a request in one must never reach the other.
+     * The course rows are the control for every category deletion, and the
+     * category row is the control for the final course-context deletion: the two
+     * tables are keyed to different context levels, so a request in one must never
+     * reach the other.
      *
      * @return void
      */
@@ -379,7 +380,7 @@ final class provider_test extends provider_testcase {
     }
 
     /**
-     * A category last set to PUBLIC exports the "Public" label, not "Listed".
+     * A category last set to public exports the "Public" label, not "Listed".
      *
      * @return void
      */

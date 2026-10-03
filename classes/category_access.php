@@ -27,55 +27,52 @@ namespace local_unlistedcourses;
 /**
  * Decides whether the current user may discover a course category.
  *
- * A category in the UNLISTED state ({@see category_discoverability}) is named
+ * A category in the unlisted state ({@see category_discoverability}) is named
  * only to somebody who has a relationship with that category. Everyone else
  * must not learn that it exists.
  *
- * THE STATE IS A PROPERTY OF THE PATH. A category is effectively unlisted when
+ * The state is a property of the path. A category is effectively unlisted when
  * it or any ancestor carries the state, so one row withholds a whole subtree
  * and clearing a child's own row cannot un-hide it. The quantifier over those
- * ancestors is AND, not OR: for EVERY effectively-unlisted category on the
+ * categories is AND, not OR: for every effectively-unlisted category on the
  * path the viewer must satisfy one of the three terms below. Two nested
  * unlisted categories therefore need eligibility for both - the inner one is
  * not a way out of the outer one.
  *
  * The three terms, evaluated per unlisted category U on the path:
  *
- * - COHORT. The viewer belongs to a cohort whose context IS U's own context.
+ * - Cohort. The viewer belongs to a cohort whose context is U's own context.
  *   Not an ancestor's, not the system one: a cohort at the system context is
  *   how most sites hold their entire student body, and treating it as a
  *   relationship with one category would admit everybody. Read straight from
  *   {cohort_members}, never through cohort_get_user_cohorts(), which filters
  *   visible = 1 - an invisible cohort is a normal way to run an automatic
  *   membership rule, and it still grants.
- * - ROLE. The viewer holds any role assignment in U's context or in an
- *   ancestor CATEGORY context of U. A role at a category BELOW U does not
+ * - Role. The viewer holds any role assignment in U's context or in an
+ *   ancestor category context of U. A role at a category below U does not
  *   count, and neither does one at a course inside it: both are relationships
  *   with something U contains, not with U. System-context assignments are not
  *   read at all - a role held site-wide says nothing about one category, and
- *   the site-wide people it is meant to admit arrive through the escape below.
- * - STAFF. has_capability('moodle/category:viewhiddencategories', U). Core's
+ *   the site-wide people it is meant to admit arrive through the staff term.
+ * - Staff. has_capability('moodle/category:viewhiddencategories', U). Core's
  *   own idiom for "may see a category that is hidden", held by manager and
- *   coursecreator by archetype - which is what admits a manager assigned at
- *   the system context, and site admins with it.
+ *   coursecreator by archetype, which admits a manager assigned at the system
+ *   context. Site admins are answered before any term is read.
  *
- * ROLE SWITCHING DOES NOT CHANGE A CATEGORY ANSWER, and that is a choice
- * rather than an accident. The role term is a raw read of {role_assignments},
- * which no switch touches, and has_capability() at a category context ignores
- * a switch made at a course context because the switch applies only within the
- * path it was made in. So a manager who switches to student inside a course
- * keeps seeing the category tree they administer, which is what the switch is
- * for: it previews a COURSE, not the site.
+ * Role switching does not change a category answer, by design. The role term
+ * is a raw read of {role_assignments}, which no switch touches, and
+ * has_capability() at a category context ignores a switch made at a course
+ * context because the switch applies only within the path it was made in. So
+ * a manager who switches to student inside a course keeps seeing the category
+ * tree they administer: the switch previews a course, not the site.
  *
- * CURRENT USER ONLY, like {@see access}, and NOTHING IS CACHED BEYOND THE
- * REQUEST for the reason that class gives: tool_dynamic_cohorts writes
- * cohort_members in bulk without firing cohort_member_added/removed, so a
- * cache invalidated by those events would keep showing a category to somebody
- * who has just been removed from the cohort that gated it. The request memos
- * are keyed by the viewer as well as the category, because setUser() and
- * "log in as" change the answer inside one request.
+ * Current user only, like {@see access}, and nothing is cached beyond the
+ * request for the reason that class gives: cohort membership can change
+ * without an event. The request memos are keyed by the viewer as well as the
+ * category, because setUser() and "log in as" change the answer inside one
+ * request.
  *
- * THE BUDGET IS FOUR STATEMENTS PER REQUEST, whatever the size of the listing:
+ * The budget is four statements per request, whatever the size of the listing:
  * one for the unlisted ids, one for the paths the caller did not already
  * carry, one for the viewer's cohorts and one for the viewer's category roles.
  * When nothing is unlisted it is one, and the same one for a site admin and
@@ -185,9 +182,9 @@ class category_access {
             return [];
         }
 
-        /* The fast path of the whole feature, and the only reason it is affordable
-           to ask this on every listing: with no category unlisted there is nothing
-           to withhold, and no path, cohort or role is read at all. */
+        /* The fast path that makes it affordable to ask this on every listing: with
+           no category unlisted there is nothing to withhold, and no path, cohort or
+           role is read at all. */
         $unlisted = category_discoverability::unlisted_ids();
         if (!$unlisted) {
             return array_fill_keys(array_keys($paths), true);
@@ -214,11 +211,10 @@ class category_access {
             return $answers;
         }
 
-        /* Fail closed for visitors and guests, and do it before any membership is
-           read: neither can hold a cohort membership or a role that means anything
-           here, so the two queries below would be spent to reach the same answer -
-           and on the odd site where a guest HAS been swept into a cohort, the
-           refusal is still the right one. */
+        /* Fail closed for visitors and guests, and skip the two membership queries
+           below for them: neither can hold a cohort membership or a role that means
+           anything here, and on a site where the guest user has been added to a
+           cohort the refusal is still the right answer. */
         $visitor = !isloggedin() || isguestuser();
 
         $unresolved = self::fill_paths($unresolved);
@@ -240,7 +236,7 @@ class category_access {
                 foreach ($unlistedonpath as $unlistedid) {
                     $terms[] = self::eligible_for($unlistedid, $pathids, $cohortcats, $rolecats);
                 }
-                // AND over every effectively-unlisted ancestor, not "any of them".
+                // AND over every unlisted category on the path, the category itself included.
                 $answer = !in_array(false, $terms, true);
             }
             self::$discoverable[self::memo_key($viewer, $categoryid)] = $answer;
@@ -328,7 +324,7 @@ class category_access {
     /**
      * Whether the viewer holds a role at this category or above it.
      *
-     * "Above it" is this category's OWN ancestors, which is the prefix of the
+     * "Above it" is this category's own ancestors, which is the prefix of the
      * path being answered up to and including it - never the whole path. A role
      * at a category further down grants access to that category, and to nothing
      * that contains it.
@@ -373,9 +369,7 @@ class category_access {
      * The unlisted categories the viewer holds a cohort membership at.
      *
      * One query over every unlisted id, memoised for the viewer. The cohort
-     * context must BE the category's own: an ancestor's cohort is a
-     * relationship with the ancestor, and the system one is where a site keeps
-     * its whole population.
+     * context must be the category's own; see the class docblock.
      *
      * @param array $unlisted The ids of every unlisted category.
      * @return array The subset of them the viewer holds a cohort membership at.
@@ -409,7 +403,7 @@ class category_access {
      * Every category the viewer holds any role assignment in.
      *
      * One query, memoised for the viewer, and deliberately not narrowed to the
-     * unlisted ids the way the cohort one is: a role at a LISTED ancestor of an
+     * unlisted ids the way the cohort one is: a role at a listed ancestor of an
      * unlisted category grants it, so the ancestors have to come back too.
      * Only category contexts are read - a system assignment is not a
      * relationship with a category.

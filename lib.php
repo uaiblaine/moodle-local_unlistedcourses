@@ -70,13 +70,12 @@ function local_unlistedcourses_pre_course_category_delete_move($category, $newpa
  * core builds in settings_navigation::load_category_settings(), which
  * secondary::load_category_navigation() sweeps into the category page's "More"
  * menu. The default placement is what puts it there, so
- * set_show_in_secondary_navigation(false) is deliberately NOT called.
+ * set_show_in_secondary_navigation(false) is deliberately not called.
  *
- * THE GUARD ORDER IS THE POINT: this runs on every page of the site, so the
- * cheapest test comes first. The context class is checked before the
- * capability, because has_capability() resolves a role definition and this
- * callback would otherwise pay for it on every course, activity and profile
- * page; the container is looked up last, because find() walks the tree.
+ * This runs on every page of the site, so the cheapest guard comes first: the
+ * context class before the capability, because has_capability() resolves role
+ * definitions that every course, activity and profile page would otherwise pay
+ * for, and the container lookup last, because find() walks the tree.
  *
  * @param settings_navigation $settingsnav The settings navigation being built.
  * @param \core\context|null $context The context of the page being rendered.

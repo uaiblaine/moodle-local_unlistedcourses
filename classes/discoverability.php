@@ -36,11 +36,11 @@ use local_unlistedcourses\event\course_state_updated;
  * to visitors who are not logged in, on a site that forces login. Only a
  * course in a non-default state has a row; absence means listed.
  *
- * THE CAPABILITY CHECK LIVES IN set_state() AND NOWHERE ELSE. The course form
+ * The capability check lives in set_state() and nowhere else. The course form
  * is one of four writers - the web service, tool_uploadcourse and course
  * restore all dispatch the same hook or call this class directly - so a check
  * placed in the form would be a check three of them route around. Only the
- * transitions that enter or leave PUBLIC are gated here, on
+ * transitions that enter or leave the public state are gated here, on
  * local/unlistedcourses:publish: publishing a course to the internet is not
  * an editing act, and un-publishing one is that same decision reversed.
  * Moving between listed and unlisted carries no gate of its own, on purpose -
@@ -55,7 +55,7 @@ use local_unlistedcourses\event\course_state_updated;
  * not publish saves an unrelated change: the save must never un-publish
  * silently, and it must never fail over a value the editor did not touch.
  *
- * NOTHING HERE IS CACHED BEYOND THE REQUEST. The state feeds an access
+ * Nothing here is cached beyond the request. The state feeds an access
  * decision, and the rest of the decision (enrolments, cohort membership,
  * enrolment windows) is deliberately uncached in {@see access} - a cross
  * request cache of the state alone would buy nothing and would add a second
@@ -159,7 +159,7 @@ class discoverability {
     /**
      * Whether the course is unlisted.
      *
-     * This is the state only. Whether the CURRENT user may still discover an
+     * This is the state only. Whether the current user may still discover an
      * unlisted course is {@see access::is_course_discoverable()}.
      *
      * @param int $courseid The course id.
@@ -172,23 +172,21 @@ class discoverability {
     /**
      * The join and the column a bulk statement uses to read each course's own state beside its row.
      *
-     * THE ONLY WAY TO READ THE STATE OF A POPULATION. {@see get_states()} takes
-     * the ids it is asked about and hands them to the database as one IN list,
-     * which is the right shape for a page of courses and the wrong one for a
-     * subtree of thousands: get_in_or_equal() emits one placeholder per id and
+     * Use this, not {@see get_states()}, to read the state of a population.
+     * get_states() hands the ids it is asked about to the database as one IN
+     * list, which is the right shape for a page of courses and the wrong one for
+     * a subtree of thousands: get_in_or_equal() emits one placeholder per id and
      * never chunks, so a caller listing a whole category tree would either hit
-     * the protocol's parameter ceiling or pay a statement per chunk. A LEFT
-     * JOIN on this table costs nothing per row and carries no parameter at all,
-     * so a listing that already runs one statement over {course} reads the
-     * state in that same statement.
+     * the driver's parameter limit or pay a statement per chunk. A LEFT JOIN on
+     * this table carries no parameter at all, so a listing that already runs one
+     * statement over {course} reads the state in that same statement.
      *
      * The caller selects the column under a name of its own and compares it
-     * against the STATE_* constants. Two rules travel with it, and the second
-     * is the one that matters: a course without a row reads as the default
-     * (that is what the COALESCE is for), and a value the table holds that is
-     * NOT one of the known states must be read as listed and never as public -
-     * so an anonymous page tests `= STATE_PUBLIC` (an unknown value fails that
-     * for free) and never `<> STATE_UNLISTED`.
+     * against the STATE_* constants. Two rules travel with it: a course without
+     * a row reads as the default (that is what the COALESCE is for), and a value
+     * the table holds that is not one of the known states must be read as listed
+     * and never as public - so an anonymous page tests `= STATE_PUBLIC` (an
+     * unknown value fails that for free) and never `<> STATE_UNLISTED`.
      *
      * Both aliases are interpolated into SQL, so they are checked against the
      * shape of an identifier and anything else is refused before a statement
@@ -219,7 +217,7 @@ class discoverability {
      *
      * This is the gate for an anonymous page, so it delegates to no capability:
      * a course that is public in this table but hidden, or that sits inside a
-     * hidden category, is NOT public. Core's own answer to "may this visitor see the
+     * hidden category, is not public. Core's own answer to "may this visitor see the
      * course" (core_course_category::can_view_course_info()) ends in a
      * capability check, and accesslib hard-denies every capability for user
      * id 0 while forcelogin is on - so the visibility half of that answer is
@@ -234,7 +232,7 @@ class discoverability {
      * category has nobody it could be served to anonymously. Answering
      * otherwise would let "public" quietly outrank the category above it.
      *
-     * Independent of the viewer, unlike everything in {@see access}. One course
+     * Independent of the viewer, unlike the predicates in {@see access}. One course
      * at a time; {@see are_public()} is the same answer for a whole listing and
      * holds the composition, which this hands over to so the two can never
      * disagree.
@@ -250,21 +248,19 @@ class discoverability {
     /**
      * Whether each of these courses may be served to a visitor who is not logged in.
      *
-     * The batched twin of {@see is_public()}, composing exactly the same answer
+     * The batched form of {@see is_public()}, composing exactly the same answer
      * and costing four statements whatever the size of the list: the state of
      * the ids, the courses' own rows, the paths of the distinct categories they
      * sit in, and the visibility of the distinct categories on those paths. The
      * memoised unlisted ids are the fifth read, shared with the rest of the
      * plugin. Every IN list is bounded by what the caller asked for or by the
-     * paths those ids carry, never by a population.
+     * paths those ids carry, never by a population, so an anonymous listing can
+     * ask about a whole page at once.
      *
-     * It exists because the anonymous listing asks about a whole page at once,
-     * and a loop over is_public() would be four statements PER COURSE.
-     *
-     * NON-THROWING FOR A COURSE THAT IS NOT THERE, and false for it: the ids
-     * reaching this come from an anonymous surface, so a missing course is an
-     * answer, never an exception. Memoised per course for the request, with no
-     * viewer in the key, because there is no viewer in the answer.
+     * Non-throwing, and false, for a course that is not there: the ids reaching
+     * this come from an anonymous surface, so a missing course is an answer,
+     * never an exception. Memoised per course for the request, with no viewer
+     * in the key, because there is no viewer in the answer.
      *
      * @param array $courseids Course ids.
      * @return array Map of courseid => bool, deduplicated, in the order given.

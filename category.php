@@ -17,10 +17,10 @@
 /**
  * Course category discoverability - The page that sets one category's state
  *
- * Reached from the category's own settings menu, which core sweeps into the
- * "More" menu of the category page. It exists because core dispatches no hook
- * on the category settings form, and it carries what that form never could: a
- * preview of who will still see the category once it is unlisted.
+ * Reached from the category's settings navigation. It exists because core
+ * dispatches no hook on the category settings form, and it carries what that
+ * form could not: a preview of who will still see the category once it is
+ * unlisted.
  *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine
@@ -37,9 +37,9 @@ $id = required_param('id', PARAM_INT);
 
 require_login();
 
-/* Core's own visibility answer FIRST. set_category_by_id() reads the raw record and
-   checks nothing, so this get() is the only thing standing between a category the
-   viewer may not see and a page naming it. Never reorder these two. */
+/* Core's visibility check must run before set_category_by_id(), which reads the raw
+   record and checks nothing: get() throws for a category the viewer may not see, so
+   the page never names it. */
 $category = core_course_category::get($id, MUST_EXIST);
 $context = \core\context\coursecat::instance($id);
 
@@ -67,8 +67,8 @@ if ($form->is_cancelled()) {
 } else if ($data = $form->get_data()) {
     category_discoverability::set_state($id, (int) $data->state);
     /* Back to this page rather than to the category, so the preview is re-read against
-       the state just saved. A save that changes nothing still confirms: set_state()
-       short-circuits, and "nothing happened" is not what an administrator asked for. */
+       the state just saved. A save that changes nothing still confirms, although
+       set_state() short-circuits it. */
     redirect(
         $PAGE->url,
         get_string('categorystate_saved', 'local_unlistedcourses'),

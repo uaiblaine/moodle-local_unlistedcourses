@@ -169,7 +169,7 @@ final class backup_restore_test extends \advanced_testcase {
     }
 
     /**
-     * Back a course up and restore it into a NEW course as the given user.
+     * Back a course up and restore it into a new course as the given user.
      *
      * @param \stdClass $course The course to copy.
      * @param int $restoreuserid The user performing the restore.
@@ -187,7 +187,7 @@ final class backup_restore_test extends \advanced_testcase {
     }
 
     /**
-     * Back a course up and restore it OVER an existing course as the given user.
+     * Back a course up and restore it over an existing course as the given user.
      *
      * @param \stdClass $source The course to copy.
      * @param int $targetid The existing target course id.
@@ -232,10 +232,10 @@ final class backup_restore_test extends \advanced_testcase {
     }
 
     /**
-     * A restore by somebody who may not publish clamps PUBLIC to listed, and carries UNLISTED.
+     * A restore by somebody who may not publish leaves a public backup's new course listed, and carries unlisted over.
      *
      * The unlisted course is the control: it proves the plugin ran for this
-     * user and that only the public state was clamped.
+     * user and that only the public state was refused.
      *
      * @return void
      */
@@ -307,7 +307,7 @@ final class backup_restore_test extends \advanced_testcase {
         discoverability::set_state((int) $publicsource->id, discoverability::STATE_PUBLIC);
         discoverability::set_state((int) $target->id, discoverability::STATE_UNLISTED);
 
-        // A teacher restores the public backup over the unlisted target: refused, and the target STAYS unlisted.
+        // A teacher restores the public backup over the unlisted target: refused, and the target stays unlisted.
         $this->restore_over($publicsource, (int) $target->id, (int) $teacher->id, true);
         $this->assertTrue(discoverability::is_unlisted((int) $target->id), 'A refusal must leave the target as it was.');
         $this->assertFalse(discoverability::is_public((int) $target->id));
@@ -322,7 +322,7 @@ final class backup_restore_test extends \advanced_testcase {
         $this->restore_over($publicsource, (int) $target->id, (int) $manager->id, true);
         $this->assertTrue(discoverability::is_public((int) $target->id));
 
-        // The teacher restores a LISTED backup over the public target: un-publishing needs the capability.
+        // The teacher restores a listed backup over the public target: un-publishing needs the capability.
         $this->restore_over($listedsource, (int) $target->id, (int) $teacher->id, true);
         $this->assertTrue(discoverability::is_public((int) $target->id), 'Un-publishing through a restore needs the capability.');
         $this->assertStringContainsString(get_string('restore_statenotapplied', 'local_unlistedcourses'), $this->restore_log());
