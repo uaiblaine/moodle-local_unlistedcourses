@@ -1,5 +1,8 @@
 # Course discoverability (local_unlistedcourses)
 
+[![Moodle Plugin CI](https://github.com/uaiblaine/moodle-local_unlistedcourses/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/uaiblaine/moodle-local_unlistedcourses/actions/workflows/ci.yml?query=branch%3Amain)
+[![MDL Shield](https://img.shields.io/endpoint?url=https%3A%2F%2Fmdlshield.com%2Fapi%2Fbadge%2Fpublisher%2Fuaiblaine%2Flocal_unlistedcourses)](https://mdlshield.com/reviews/publisher/uaiblaine/local_unlistedcourses)
+
 Owns one decision per course: **who may learn that this course exists.** Three states,
 stored in the plugin's own table and edited from the course settings form:
 
@@ -174,4 +177,16 @@ the site.
 
 ## Requirements
 
-Moodle 5.2. Brazilian Portuguese and English language packs.
+Moodle 5.2 (branch `MOODLE_502_STABLE`, release `v5.2-r1`). Moodle 5.3 is developed in alpha on the
+`MOODLE_503_dev` branch. Moodle 4.5 and 5.1 are not supported. Brazilian Portuguese and English
+language packs.
+
+## Installation
+
+Copy the plugin to `local/unlistedcourses` in your Moodle directory (`public/local/unlistedcourses`
+on Moodle 5.1 and later), or install the release zip from the Moodle plugins directory, then
+visit *Site administration > Notifications* to run the installation.
+
+## License
+
+GNU GPL v3 or later, <http://www.gnu.org/copyleft/gpl.html>. Copyright 2026 Anderson Blaine.

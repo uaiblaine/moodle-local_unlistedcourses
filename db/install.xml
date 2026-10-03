@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<XMLDB PATH="local/unlistedcourses/db" VERSION="2026091300" COMMENT="XMLDB file for Moodle local/unlistedcourses"
+<XMLDB PATH="local/unlistedcourses/db" VERSION="2026042000" COMMENT="XMLDB file for Moodle local/unlistedcourses"
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
     xsi:noNamespaceSchemaLocation="../../../lib/xmldb/xmldb.xsd"
 >

@@ -4,7 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## v5.2-r1 (2026042000) - 2026-10-02
+
+First published release, for Moodle 5.2 only (`MATURITY_STABLE`). The plugin now numbers its
+versions in the Moodle 5.2 namespace (`20260420XX`), as the fleet rule for one branch per Moodle
+version requires, so the earlier date-based numbers and the releases `v5.2-r3` and `v5.2-r4`
+(`2026090200` to `2026091301`) are gone: they were never published. Release notes below cover
+everything built before the renumbering.
+
+Removed: the upgrade steps and the migration of the retired "unlisted" course custom field into
+the plugin's own table. A site that ran a pre-release build has to treat this as a fresh
+install, and set its stored plugin version back to `2026042000` before upgrading.
+
 
 ### Added
 

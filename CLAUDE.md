@@ -54,6 +54,18 @@ its role, and none runs on the session model (Fable).
   command with its counts.
 - Workflows run only on the user's opt-in, and stay under 10 agents.
 
+## Versions
+
+`main` is the 5.2 branch (`supported = [502, 502]`, `MATURITY_STABLE`) and numbers itself in the 5.2
+namespace, `20260420XX`: the first release, `v5.2-r1`, is `2026042000` (its `$plugin->requires`),
+and every later change that needs a bump adds 1 to that counter. The 5.3 branch is
+`MOODLE_503_dev` (`MATURITY_ALPHA`, `20260928XX`) and counts on its own; 4.5 and 5.1 are not
+supported. Upgrade steps stay inside the namespace of the branch they live on. The earlier
+date-based numbers (`2026090200` to `2026091301`, releases `v5.2-r3` and `r4`) were never
+published and no longer exist; a stack or site that ran them needs its stored version set back
+before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses --name=version
+--set=2026042000`). The rule is in the fleet file, "Versioning / upgrade discipline".
+
 ## Architecture gotchas
 
 - **`is_public()` and `are_public()` live on the STATE classes, never on `access` or
@@ -137,11 +149,6 @@ its role, and none runs on the session model (Fable).
   its test writes exactly that row.
 - **An unknown stored value reads as listed, never as public.** Both `get_states()` and
   `set_state()`'s "current" read normalise it; the restore skips it.
-- **`core_customfield\handler::reset_caches()` is test-only** — it throws
-  `coding_exception` outside PHPUnit, and it took the first `mdl upgrade` down mid-step
-  (after the migration had run and before the savepoint). `legacy_field::remove()` uses
-  plain `$DB` deletes and no cache reset for that reason. The step is idempotent, which is
-  what made the second run clean.
 - **Between deploying the code and running the upgrade, every course form is a 500.** The
   hook calls `has_capability('local/unlistedcourses:publish')`, the capability is not
   installed yet, `debugging()` fires, and Whoops turns it into an exception. Not a bug to
@@ -213,7 +220,7 @@ its role, and none runs on the session model (Fable).
 - **`local_unlistedcourses_extend_settings_navigation()` is found through
   `get_plugin_list_with_function()`, which caches by the versions hash.** Adding or renaming
   a plugin callback in `lib.php` needs a version bump, or the callback is not found for a
-  reason that reads as a code fault. It is also why this branch bumped the version twice.
+  reason that reads as a code fault.
 - **`cohort_get_cohorts()` returns `['totalcohorts', 'cohorts', 'allcohorts']`, paginated, and
   checks no capability.** The preview passes an explicit page size, reads that shape, and sits
   behind `moodle/cohort:view` for the NAMES only; the counts are computed over every cohort at

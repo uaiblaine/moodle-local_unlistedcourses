@@ -25,62 +25,12 @@
 /**
  * Upgrade the plugin.
  *
+ * Upgrade steps are numbered in the version namespace of the branch they live on, never in
+ * another branch's, and none exists yet for this one.
+ *
  * @param int $oldversion The version being upgraded from.
  * @return bool Always true.
  */
 function xmldb_local_unlistedcourses_upgrade($oldversion) {
-    global $DB;
-
-    $dbman = $DB->get_manager();
-
-    if ($oldversion < 2026090200) {
-        // The discoverability state moves from a course custom field into a table of its own.
-        $table = new xmldb_table('local_unlistedcourses_state');
-        $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
-        $table->add_field('courseid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
-        $table->add_field('state', XMLDB_TYPE_INTEGER, '2', null, XMLDB_NOTNULL, null, '0');
-        $table->add_field('usermodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
-        $table->add_field('timemodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
-        $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
-        $table->add_key('courseid', XMLDB_KEY_FOREIGN_UNIQUE, ['courseid'], 'course', ['id']);
-        $table->add_key('usermodified', XMLDB_KEY_FOREIGN, ['usermodified'], 'user', ['id']);
-        if (!$dbman->table_exists($table)) {
-            $dbman->create_table($table);
-        }
-
-        // Carry the ticked "unlisted" checkboxes over, then retire the field and its category.
-        \local_unlistedcourses\local\legacy_field::migrate();
-        \local_unlistedcourses\local\legacy_field::remove();
-
-        upgrade_plugin_savepoint(true, 2026090200, 'local', 'unlistedcourses');
-    }
-
-    if ($oldversion < 2026090600) {
-        // Course categories get a discoverability state of their own: listed or unlisted.
-        $table = new xmldb_table('local_unlistedcourses_catstate');
-        $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
-        $table->add_field('categoryid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
-        $table->add_field('state', XMLDB_TYPE_INTEGER, '2', null, XMLDB_NOTNULL, null, '0');
-        $table->add_field('usermodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
-        $table->add_field('timemodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
-        $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
-        $table->add_key('categoryid', XMLDB_KEY_FOREIGN_UNIQUE, ['categoryid'], 'course_categories', ['id']);
-        $table->add_key('usermodified', XMLDB_KEY_FOREIGN, ['usermodified'], 'user', ['id']);
-        if (!$dbman->table_exists($table)) {
-            $dbman->create_table($table);
-        }
-
-        upgrade_plugin_savepoint(true, 2026090600, 'local', 'unlistedcourses');
-    }
-
-    if ($oldversion < 2026091300) {
-        /* Course categories gain a third state, public, and a capability of their own to
-           enter and leave it. Nothing to migrate and no schema change: the state column
-           already holds the value, a category without a row is still listed, and the
-           capability installs itself from db/access.php. The rung exists so the savepoint
-           follows the version, and so this release is visible in the upgrade log. */
-        upgrade_plugin_savepoint(true, 2026091300, 'local', 'unlistedcourses');
-    }
-
     return true;
 }
