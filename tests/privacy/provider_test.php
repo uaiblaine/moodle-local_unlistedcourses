@@ -254,6 +254,8 @@ final class provider_test extends provider_testcase {
      * @return void
      */
     public function test_delete_data_for_users(): void {
+        global $DB;
+
         $this->resetAfterTest();
         [$coursea, $courseb, $managera, $managerb] = $this->seed();
         $contexta = \core\context\course::instance($coursea->id);
@@ -263,6 +265,11 @@ final class provider_test extends provider_testcase {
         provider::delete_data_for_users($userlist);
 
         $this->assertSame(0, $this->usermodified((int) $coursea->id));
+        $this->assertSame(
+            discoverability::STATE_PUBLIC,
+            (int) $DB->get_field(discoverability::TABLE, 'state', ['courseid' => $coursea->id], MUST_EXIST),
+            'The row must be detached, not deleted: deleting it would un-publish the course.'
+        );
         $this->assertSame((int) $managerb->id, $this->usermodified((int) $courseb->id));
     }
 
@@ -366,6 +373,11 @@ final class provider_test extends provider_testcase {
         $userlist = new approved_userlist($contexta, self::COMPONENT, [$managera->id, $managerb->id]);
         provider::delete_data_for_users($userlist);
         $this->assertSame(0, $this->category_usermodified((int) $categorya->id));
+        $this->assertSame(
+            category_discoverability::STATE_UNLISTED,
+            (int) $DB->get_field(category_discoverability::TABLE, 'state', ['categoryid' => $categorya->id], MUST_EXIST),
+            'The row must be detached, not deleted: deleting it would list the category again.'
+        );
         $this->assertSame((int) $managera->id, $this->usermodified((int) $coursea->id), 'The course row is untouched.');
 
         // And the other way round: a course-context deletion never reaches a category row.

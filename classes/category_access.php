@@ -59,6 +59,9 @@ namespace local_unlistedcourses;
  *   coursecreator by archetype, which admits a manager assigned at the system
  *   context. Site admins are answered before any term is read.
  *
+ * Category id 0, the site top level, is not a category and has no state of its own: its
+ * answer is true only while no category is unlisted, so callers do not ask about it.
+ *
  * Role switching does not change a category answer, by design. The role term
  * is a raw read of {role_assignments}, which no switch touches, and
  * has_capability() at a category context ignores a switch made at a course

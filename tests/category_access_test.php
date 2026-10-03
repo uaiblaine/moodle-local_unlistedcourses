@@ -256,7 +256,7 @@ final class category_access_test extends \advanced_testcase {
         category_access::reset_caches();
         $this->assertFalse(
             category_access::is_category_discoverable((int) $category->id),
-            'D1: a cohort at the system context must not count.'
+            'A cohort at the system context must not count.'
         );
 
         // Control: the same user, added to a cohort at the category's own context, is eligible.
@@ -297,7 +297,7 @@ final class category_access_test extends \advanced_testcase {
         category_access::reset_caches();
         $this->assertFalse(
             category_access::is_category_discoverable((int) $child->id),
-            'A cohort at a listed ancestor above the unlisted category must not count (D1).'
+            'A cohort at a listed ancestor above the unlisted category must not count.'
         );
 
         $this->setUser($atsibling);
@@ -335,7 +335,7 @@ final class category_access_test extends \advanced_testcase {
         category_access::reset_caches();
         $this->assertTrue(
             category_access::is_category_discoverable((int) $category->id),
-            'D10: an invisible cohort must still grant access.'
+            'An invisible cohort must still grant access.'
         );
     }
 
@@ -699,7 +699,7 @@ final class category_access_test extends \advanced_testcase {
     }
 
     /**
-     * When nothing is unlisted, the predicate issues at most one statement and answers true for all.
+     * When nothing is unlisted, a warm call reads nothing and a cold call issues one statement; both answer true for all.
      *
      * @return void
      */
@@ -722,10 +722,20 @@ final class category_access_test extends \advanced_testcase {
         $answers = category_access::are_categories_discoverable([(int) $first->id, (int) $second->id]);
         $reads = $DB->perf_get_reads() - $before;
 
+        $this->assertSame(0, $reads, 'The warm-up memoised that nothing is unlisted, so a warm call reads nothing.');
+        $this->assertSame([(int) $first->id => true, (int) $second->id => true], $answers);
+
+        // A cold call is the one that reads: the unlisted ids, and nothing else.
+        category_access::reset_caches();
+        $before = $DB->perf_get_reads();
+        $answers = category_access::are_categories_discoverable([(int) $first->id, (int) $second->id]);
+        $reads = $DB->perf_get_reads() - $before;
+
+        $this->assertGreaterThan(0, $reads, 'Precondition: a cold call must read the unlisted ids.');
         $this->assertLessThanOrEqual(
             3,
             $reads,
-            'A recordset can cost more than one statement on some drivers; 3 is the measured ceiling.'
+            'A recordset can cost more than one statement on some drivers; 3 is the ceiling for the one query.'
         );
         $this->assertSame([(int) $first->id => true, (int) $second->id => true], $answers);
     }
