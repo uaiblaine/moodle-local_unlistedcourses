@@ -347,7 +347,7 @@ final class courseform_test extends \advanced_testcase {
             $this->assertTrue(discoverability::is_public((int) $course->id));
         }
 
-        // Control: the same teacher saving WITHOUT the element is fine, and the course stays public.
+        // Control: the same teacher saving without the element is fine, and the course stays public.
         update_course((object) ['id' => $course->id, 'fullname' => 'Wired, renamed']);
         $this->assertTrue(discoverability::is_public((int) $course->id));
     }

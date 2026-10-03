@@ -29,41 +29,37 @@ use local_unlistedcourses\category_discoverability;
 /**
  * The preview beside the state control: who will still discover this category.
  *
- * Unlisting a category is the one act in this plugin whose consequence an
- * administrator cannot see from the form that performs it. The three terms that
- * open an unlisted category - a cohort at the category, a role here or above,
- * staff - are spread across cohort administration, role assignment and role
- * definitions, so the question "and who does that leave?" has no page of its own.
- * This is that page, rendered where the decision is made.
+ * The three terms that open an unlisted category - a cohort at the category, a
+ * role here or above, staff - are spread across cohort administration, role
+ * assignment and role definitions, so no core page answers "and who does
+ * unlisting leave?". This panel answers it where the decision is made.
  *
- * IT COUNTS THE SAME THINGS {@see \local_unlistedcourses\category_access} READS,
- * and must keep agreeing with it: cohorts whose context IS this category's own
+ * It counts the same things {@see \local_unlistedcourses\category_access} reads,
+ * and must keep agreeing with it: cohorts whose context is this category's own
  * (never an ancestor's, never the system one), and role holders at this category
- * or at a CATEGORY above it. Staff are deliberately outside the count - every
+ * or at a category above it. Staff are deliberately outside the count - every
  * manager and course creator of the site would otherwise swamp it - which is why
- * the string says "besides staff".
+ * the strings say "besides staff".
  *
- * AND THE QUANTIFIER IS THE PREDICATE'S. When a category above this one is
- * unlisted too, the viewer must satisfy that one as well, so the count is the
- * INTERSECTION of the eligible sets, not this category's own set. A cohort
- * defined here admits nobody the ancestor withholds the subtree from, and a
- * headline that ignored the ancestor would report people who cannot see the
- * category and would fall silent exactly when the answer is nobody.
+ * The quantifier is the predicate's. When a category above this one is unlisted
+ * too, a user must satisfy that one as well, so the count is the intersection of
+ * the eligible sets, not this category's own set. A headline that ignored the
+ * ancestor would report people who cannot see the category, and would miss the
+ * "visible to nobody" warning exactly when nobody is the true answer.
  *
- * A PUBLIC CATEGORY GETS A DIFFERENT PANEL, and no accounting at all. The cohort
- * and role terms answer "who still sees this while it is unlisted", and a public
- * category is being shown to everybody, visitors included - so the counts would
- * answer a question nobody asked, at two statements per unlisted ancestor. What
- * an administrator needs there instead is what a visitor will be served, and the
+ * A public category gets a different panel and no accounting. The cohort and
+ * role terms answer "who still sees this while it is unlisted", and a public
+ * category is shown to everybody, visitors included, so the counts would answer
+ * a question nobody asked, at two statements per unlisted ancestor. What an
+ * administrator needs there instead is what a visitor will be served, and the
  * two arrangements that make the public state inert: an unlisted category above
  * it, or a hidden category anywhere on its path.
  *
- * TWO GATES ARE INDEPENDENT HERE, and conflating them would lie in one direction
- * or the other. Whether the viewer may read cohort NAMES is
+ * Two gates are independent here. Whether the viewer may read cohort names is
  * moodle/cohort:view; whether the category is visible to anybody is a fact about
- * the site. So a viewer without that capability sees the counts and no names -
- * and never the "visible to nobody" warning on the strength of a list they were
- * not allowed to see.
+ * the site. So a viewer without that capability sees the counts but no names,
+ * and the "visible to nobody" warning is computed from the counts, never from
+ * the list of names they may not read.
  *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine
@@ -128,20 +124,16 @@ class category_preview implements \renderable, \templatable {
             $cohortsmore = max(0, (int) $listing['totalcohorts'] - count($cohorts));
         }
 
-        /* Counted over EVERY cohort at this category, not over the page of them the
+        /* Counted over every cohort at this category, not over the page of them the
            template names: the count answers "is anybody left", which must not change
            with a listing limit or with who is reading it. */
         $cohortusers = self::cohort_members($this->context->id);
         $roleusers = self::role_holders($pathids);
         $eligible = array_unique(array_merge($cohortusers, $roleusers));
 
-        /* AND over the unlisted categories ABOVE this one, never OR: that is the
-           quantifier category_access::answers() applies, so a cohort defined here does
-           not let anybody past an ancestor that withholds the whole subtree. Counting
-           this category's own two terms alone would overstate the headline, and would
-           keep the "visible to nobody" warning quiet on the one arrangement where
-           nobody is the true answer. Two more statements per unlisted ancestor, which
-           is a price only this admin page pays. */
+        /* AND over the unlisted categories above this one, as category_access::answers()
+           does (see the class docblock). Two more statements per unlisted ancestor, a
+           price only this page pays. */
         foreach ($unlistedancestors as $ancestorid) {
             $eligible = array_intersect($eligible, self::eligible_users($ancestorid, $pathids));
         }
@@ -169,10 +161,10 @@ class category_preview implements \renderable, \templatable {
     /**
      * Whether this site lets a category carry a theme of its own.
      *
-     * Read in both branches, from here rather than twice, because the two
-     * branches must not be able to disagree about a fact of the site: a theme
-     * set on a category switches its pages away from the theme that withholds
-     * it, and that is as true of a public category as of an unlisted one.
+     * Read by both branches from this one place, so they cannot disagree about a
+     * fact of the site: a theme set on a category switches its pages away from
+     * the theme that applies this plugin's listing rules, which matters for
+     * a public category as much as for an unlisted one.
      *
      * @return bool True when category themes are enabled.
      */
@@ -189,12 +181,10 @@ class category_preview implements \renderable, \templatable {
      * with the accounting empty: see the class docblock for why it is not
      * computed rather than computed and hidden.
      *
-     * 'ancestorunlisted' keeps its truthful value here although the template
-     * renders it only in the non-public branch, where the public panel says the
-     * same thing through 'publicancestorunlisted' in its own words. Exporting
-     * false for it would be cheaper by nothing and would make the one key whose
-     * name states a fact about the tree state the opposite of that fact, which
-     * is a trap for whoever next renders it on both branches.
+     * 'ancestorunlisted' keeps its true value here although the template renders
+     * it only in the non-public branch (the public panel says the same thing
+     * through 'publicancestorunlisted'), so the key never contradicts its name if
+     * a later template reads it in both branches.
      *
      * @param int $state The stored state, which is the public one here.
      * @param array $pathids This category's own id and every ancestor's.
@@ -246,7 +236,7 @@ class category_preview implements \renderable, \templatable {
      * The users one effectively-unlisted category on the path leaves it open to.
      *
      * Its own two terms, spelled the way category_access spells them: a cohort whose
-     * context IS that category's, and a role at it or at a category above IT - which is
+     * context is that category's, and a role at it or at a category above it - which is
      * the prefix of this path, never the whole of it. Staff are outside the count here
      * for the reason the class docblock gives.
      *
@@ -309,7 +299,7 @@ class category_preview implements \renderable, \templatable {
     }
 
     /**
-     * The users belonging to a cohort whose context IS this one.
+     * The users belonging to a cohort whose context is this one.
      *
      * Read straight from the tables for the reason category_access gives: an
      * invisible cohort still grants, so cohort_get_user_cohorts() and anything
@@ -331,7 +321,7 @@ class category_preview implements \renderable, \templatable {
     /**
      * The users holding any role at one of these categories.
      *
-     * The whole path, because a role at a LISTED ancestor opens an unlisted
+     * The whole path, because a role at a listed ancestor opens an unlisted
      * descendant - the rule the predicate applies, reproduced here so the two
      * cannot drift apart. Course and system assignments are not read: neither is
      * a relationship with this category.

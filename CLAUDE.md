@@ -99,8 +99,8 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   it. Viewer-keyed, dropped by `reset_caches()`.
 - **The capability check lives in `discoverability::set_state()` and nowhere else.** The
   course form is one of four writers — the web service and `tool_uploadcourse` dispatch the
-  same `after_form_submission` hook (from `create_course()` / `update_course()`, before the
-  course row is written), and restore calls the class directly. A check in the form is a
+  same `after_form_submission` hook (`create_course()` dispatches it after the course row is
+  inserted, `update_course()` before the row is updated), and restore calls the class directly. A check in the form is a
   check three of them route around. Only transitions that enter or leave PUBLIC are gated,
   and both directions need the same capability: un-publishing is the publishing decision
   reversed. Listed↔unlisted is deliberately ungated here — every caller is already behind
@@ -111,8 +111,10 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   re-submit "public" from a frozen control when an editor who may not publish saves an
   unrelated change. Remove the short circuit and that save throws.
 - **The frozen control must persist.** `$mform->freeze()` on its own exports the element's
-  DEFAULT, not its value (`formslib.php:2410`); `setPersistantFreeze(true)` before the
-  freeze renders a hidden input carrying the current value. `hardFreeze()` sets persistence
+  DEFAULT, not its value (`formslib.php:2410`). Both forms set that default to the current
+  state, so a plain freeze would resubmit the same state, but the persistent freeze makes the
+  submitted value explicit: `setPersistantFreeze(true)` before the freeze renders a hidden
+  input carrying the current value. `hardFreeze()` sets persistence
   off explicitly and must not be used here.
 - **`is_public()` reproduces core's visibility answer instead of calling it.**
   `core_course_category::can_view_course_info()` ends in `has_capability()`, and
@@ -133,11 +135,13 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   UNLISTED passes the gate), and that on a new course it was untestable because `set_state()`
   refuses the same way. Removed.
 - **The backup writes the element for EVERY course, listed included** (`set_source_sql` with
-  `COALESCE(s.state, 0)`). Core processes `course.xml` only into a new course or when
-  "overwrite course configuration" is on (`restore_course_task::build()`), and then rewrites
-  every setting from the backup; an absent element would mean "keep the target's state", so a
-  listed backup restored over an unlisted course would leave the stale state behind. With the
-  element always present the state follows exactly core's rule for `visible`. Course
+  `COALESCE(s.state, 0)`). Core processes `course.xml` only into a new course, when
+  "overwrite course configuration" is on, or on a `tool_uploadcourse` template restore
+  (`restore_course_task::build()`), and then rewrites the course settings from the backup; an
+  absent element would mean "keep the target's state", so a listed backup restored over an
+  unlisted course would leave the stale state behind. With the element always present the state
+  follows core's rule for `visible`, with one difference: a template restore keeps a `visible`
+  column given in the CSV over the template's, and no CSV column does the same for this state. Course
   duplicate (`MODE_SAMESITE`, new course) carries it too.
 - **On a new course the form asks what the creator WILL hold**, through core's own
   `guess_if_creator_will_have_course_capability()` (the call behind the core visibility
@@ -145,8 +149,8 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   exist yet, and a course creator gains `moodle/course:visibility` only through
   `creatornewroleid`. A plain `has_capability()` hid the control from course creators.
 - **The site course has no state.** `set_state()` refuses it; the form skips it; a row
-  written by hand for it is what `access::eligible()`'s SITEID exemption exists for, and
-  its test writes exactly that row.
+  written by hand for it is what the SITEID exemption in `access::compute_course_relationship()`
+  exists for, and its test writes exactly that row.
 - **An unknown stored value reads as listed, never as public.** Both `get_states()` and
   `set_state()`'s "current" read normalise it; the restore skips it.
 - **Between deploying the code and running the upgrade, every course form is a 500.** The
@@ -174,7 +178,8 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   import-mode backup is not zipped, and a general-mode restore into a new course runs
   `restore_check::check_security()` for the given user. A restoring teacher gets
   `editingteacher` **at the category**, which grants the restore capabilities in the new
-  course too; a manager role there would also grant publish and void the clamp test.
+  course too; a manager role there would also grant publish and void the test that a restorer who
+  may not publish is refused.
 - **`enrol_apply` is absent from a fresh test site's `enrol_plugins_enabled`** —
   `add_apply_enrol()` in `access_test` enables it first.
 - **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds fifty-five

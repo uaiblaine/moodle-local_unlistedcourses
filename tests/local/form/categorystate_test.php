@@ -30,12 +30,9 @@ use PHPUnit\Framework\Attributes\CoversClass;
 /**
  * Tests for the category discoverability editing form's own markup.
  *
- * The form is rendered with render(), the repo's own idiom for a plain
- * \moodleform (see local_groupdist\form\options_form_test, the fleet
- * precedent this follows), and every assertion is scoped to the ONE element
- * tag it is about - never to the whole page - so a match further down the
- * markup (the preview panel this form also embeds) cannot satisfy it by
- * accident.
+ * Every assertion is scoped to the one element tag it is about, never to the
+ * whole rendered form, so a match elsewhere in the markup (such as the preview
+ * panel the form embeds) cannot satisfy it by accident.
  *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine
@@ -88,7 +85,7 @@ final class categorystate_test extends \advanced_testcase {
      * Extract one option's own tag, by its value, from a select's markup.
      *
      * Scoped to the single tag so that checking for "selected" cannot be
-     * satisfied by a DIFFERENT option later in the same select.
+     * satisfied by another option in the same select.
      *
      * @param string $select The select element's markup.
      * @param int $value The option's value attribute.
@@ -137,7 +134,7 @@ final class categorystate_test extends \advanced_testcase {
     }
 
     /**
-     * The public option is offered on the publish capability, and on nothing else.
+     * A category that is not already public offers no public option without the publish capability.
      *
      * @return void
      */
@@ -199,7 +196,7 @@ final class categorystate_test extends \advanced_testcase {
     }
 
     /**
-     * The default option is the category's CURRENT state, not always "Listed".
+     * The default option is the category's current state, not always "Listed".
      *
      * @return void
      */
@@ -233,8 +230,9 @@ final class categorystate_test extends \advanced_testcase {
     }
 
     /**
-     * The hidden 'id' element carries the category id, so the submit knows which category to
-     * change - not attribute order, which the pear renderer does not promise.
+     * The hidden 'id' element carries the category id, so the submission knows which category
+     * to change. Type and value are checked separately: the QuickForm renderer does not promise
+     * an attribute order.
      *
      * @return void
      */

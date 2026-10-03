@@ -37,14 +37,13 @@ require_once($CFG->libdir . '/formslib.php');
  * Three options, and the third one is offered on a capability of its own: only
  * somebody holding local/unlistedcourses:publishcategory may take a category
  * into or out of the public state, so anybody else is shown the two they may
- * set. A category that is ALREADY public shows its value frozen, and frozen
- * persistently - the value still submits - so that saving this form never
- * un-publishes a category by omission, and never fails over a value the editor
- * did not touch. The strings are the course side's own: a listed category and a
- * listed course mean the same thing to a reader, and two vocabularies for one
- * idea would be worse than a shared one.
+ * set. A category that is already public shows its value frozen, and frozen
+ * persistently - the value still submits - so that saving this form leaves
+ * the state where it was and never fails over a value the editor did not
+ * touch. The strings are the course side's own: a listed category and a listed
+ * course mean the same thing to a reader.
  *
- * NONE OF THIS IS A SECURITY BOUNDARY. The boundary is
+ * None of this is a security boundary. The boundary is
  * {@see category_discoverability::set_state()}, which checks the manage
  * capability on every real transition whatever route reached it; the page checks
  * it too, so that nobody is shown a form their save will refuse.
@@ -91,9 +90,7 @@ class categorystate extends \moodleform {
         $mform->addHelpButton('state', 'categorystate', 'local_unlistedcourses');
 
         if ($current === category_discoverability::STATE_PUBLIC && !$canpublish) {
-            /* Persistent freeze: the value is displayed as text AND re-submitted through a
-               hidden input, so saving the form leaves the state exactly where it was. A
-               plain freeze would export the element's default instead. */
+            // Persistent freeze: the value is displayed as text and re-submitted through a hidden input.
             $mform->getElement('state')->setPersistantFreeze(true);
             $mform->freeze('state');
         }

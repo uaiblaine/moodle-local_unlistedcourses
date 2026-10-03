@@ -29,10 +29,9 @@ use PHPUnit\Framework\Attributes\CoversClass;
 /**
  * Tests for the discoverability predicate.
  *
- * Every test that asserts a course is HIDDEN also asserts that some control
+ * Every test that asserts a course is hidden also asserts that some control
  * course or control user is visible in the same run. Without the control a
- * hidden-course assertion passes just as happily when the predicate never ran
- * at all, which is the failure mode this whole plugin would be blind to.
+ * hidden-course assertion would also pass if the predicate never ran at all.
  *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine
@@ -116,7 +115,7 @@ final class access_test extends \advanced_testcase {
     }
 
     /**
-     * A course without the flag is discoverable by anyone, marked courses notwithstanding.
+     * A course with no stored state is discoverable by anyone.
      *
      * @return void
      */
@@ -191,7 +190,7 @@ final class access_test extends \advanced_testcase {
             'An actively enrolled user is not subject to the cohort gate.'
         );
 
-        // Control: an identically placed user who is NOT enrolled must be refused.
+        // Control: an identically placed user who is not enrolled must be refused.
         $stranger = $generator->create_user();
         $this->setUser($stranger);
         access::reset_caches();
@@ -231,10 +230,15 @@ final class access_test extends \advanced_testcase {
     }
 
     /**
-     * A visitor and a guest never discover an unlisted course.
+     * A guest never discovers an unlisted course with an unrestricted self enrolment instance.
      *
-     * can_self_enrol($instance, false) skips its own guest check, so an
-     * unrestricted self enrolment instance would otherwise let a guest through.
+     * This pins the outcome, not the guest guard in access::viewer_context():
+     * can_self_enrol($instance, false) skips its own guest check, but it still
+     * requires enrol/self:enrolself, a write capability that has_capability()
+     * never grants a guest, so core refuses the guest here even without the
+     * guard. The guard is held by
+     * test_the_viewer_context_guard_refuses_a_guest_and_a_visitor() and, with enrol_apply installed,
+     * by test_a_guest_is_refused_an_apply_only_course().
      *
      * @return void
      */
@@ -243,7 +247,7 @@ final class access_test extends \advanced_testcase {
         $generator = $this->getDataGenerator();
 
         $course = $generator->create_course();
-        // No cohort restriction: the case where the enrol plugin itself would say yes.
+        // No cohort restriction: the instance admits any logged-in user, as the control below shows.
         $this->add_self_enrol($course, 0);
         $this->set_unlisted((int) $course->id, true);
 
@@ -251,7 +255,7 @@ final class access_test extends \advanced_testcase {
         access::reset_caches();
         $this->assertFalse(access::is_course_discoverable((int) $course->id));
 
-        // Control: an ordinary authenticated user IS admitted by that same instance.
+        // Control: an ordinary authenticated user is admitted by that same instance.
         $this->setUser($generator->create_user());
         access::reset_caches();
         $this->assertTrue(
@@ -355,7 +359,7 @@ final class access_test extends \advanced_testcase {
      *
      * @param \stdClass $course The course.
      * @param int $cohortid Cohort id to restrict to, or 0 for no restriction.
-     * @return \stdClass|null The enrol instance record, or null when the fork is absent.
+     * @return \stdClass|null The enrol instance record, or null when enrol_apply (with allow_apply()) is not installed.
      */
     private function add_apply_enrol(\stdClass $course, int $cohortid = 0): ?\stdClass {
         global $DB;
@@ -367,9 +371,9 @@ final class access_test extends \advanced_testcase {
 
         /* enrol_apply is a third-party plugin, so it is absent from the default
            enrol_plugins_enabled a fresh test site carries - and an instance of a
-           disabled plugin is filtered out by enrol_get_instances($id, true), which
-           made the predicate answer "cannot enrol" for a reason that has nothing to
-           do with the applicant. */
+           disabled plugin is filtered out by enrol_get_instances($id, true), so the
+           predicate would answer "cannot enrol" for a reason that has nothing to do
+           with the applicant. */
         $enabled = array_keys(enrol_get_plugins(true));
         if (!in_array('apply', $enabled, true)) {
             $enabled[] = 'apply';
@@ -401,7 +405,7 @@ final class access_test extends \advanced_testcase {
 
         $course = $generator->create_course();
         if (!$this->add_apply_enrol($course, 0)) {
-            $this->markTestSkipped('enrol_apply (fleet fork) is not installed.');
+            $this->markTestSkipped('enrol_apply is not installed.');
         }
         foreach (enrol_get_instances($course->id, false) as $instance) {
             if ($instance->enrol !== 'apply') {
@@ -444,7 +448,7 @@ final class access_test extends \advanced_testcase {
         $cohort = $generator->create_cohort();
         $instance = $this->add_apply_enrol($course, (int) $cohort->id);
         if (!$instance) {
-            $this->markTestSkipped('enrol_apply (fleet fork) is not installed.');
+            $this->markTestSkipped('enrol_apply is not installed.');
         }
         foreach (enrol_get_instances($course->id, false) as $other) {
             if ($other->enrol !== 'apply') {
@@ -485,13 +489,98 @@ final class access_test extends \advanced_testcase {
     }
 
     /**
+     * Only an enrol_apply application counts as pending, not any inactive enrolment.
+     *
+     * A suspended manual enrolment is a decision already taken. The control is a waiting row of an
+     * enrol_apply instance, written straight to the tables so the test does not need that plugin:
+     * the term reads the instance's plugin name and nothing else from it.
+     *
+     * @return void
+     */
+    public function test_a_suspended_enrolment_of_another_method_is_not_a_pending_application(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $course = $generator->create_course();
+        // A cohort gate nobody passes, so that can_enrol() cannot be what keeps the course visible.
+        $this->add_self_enrol($course, (int) $generator->create_cohort()->id);
+        $this->set_unlisted((int) $course->id, true);
+
+        $suspended = $generator->create_user();
+        $generator->enrol_user($suspended->id, $course->id, 'student', 'manual', 0, 0, ENROL_USER_SUSPENDED);
+        $this->setUser($suspended);
+        access::reset_caches();
+        $this->assertFalse(
+            is_enrolled(\core\context\course::instance($course->id), $suspended, '', true),
+            'Precondition: a suspended enrolment must not read as an active one.'
+        );
+        $this->assertFalse(
+            access::is_course_discoverable((int) $course->id),
+            'A suspended manual enrolment is not an application awaiting a decision.'
+        );
+
+        // Control: the same row on an enrol_apply instance is a waiting application and keeps the course.
+        $now = time();
+        $applyid = $DB->insert_record('enrol', (object) [
+            'enrol' => 'apply',
+            'courseid' => $course->id,
+            'status' => ENROL_INSTANCE_ENABLED,
+            'sortorder' => 99,
+            'timecreated' => $now,
+            'timemodified' => $now,
+        ]);
+        $applicant = $generator->create_user();
+        $DB->insert_record('user_enrolments', (object) [
+            'enrolid' => $applyid,
+            'userid' => $applicant->id,
+            'status' => ENROL_USER_SUSPENDED,
+            'timestart' => 0,
+            'timeend' => 0,
+            'modifierid' => 0,
+            'timecreated' => $now,
+            'timemodified' => $now,
+        ]);
+        $this->setUser($applicant);
+        access::reset_caches();
+        $this->assertTrue(
+            access::is_course_discoverable((int) $course->id),
+            'Control: a waiting application on an enrol_apply instance must keep the course discoverable.'
+        );
+    }
+
+    /**
+     * The guard in access::viewer_context() answers null for a guest and for nobody logged in.
+     *
+     * The outcome tests cannot hold the guard when enrol_apply is not installed, because core refuses
+     * a guest on the self enrolment path anyway; this one reads the guard itself, with a logged-in
+     * user as the control that proves the method does return a context.
+     *
+     * @return void
+     */
+    public function test_the_viewer_context_guard_refuses_a_guest_and_a_visitor(): void {
+        $this->resetAfterTest();
+        $course = $this->getDataGenerator()->create_course();
+        $method = new \ReflectionMethod(access::class, 'viewer_context');
+
+        $this->setUser($this->getDataGenerator()->create_user());
+        $this->assertNotNull($method->invoke(null, (int) $course->id), 'Control: a logged-in user gets the course context.');
+
+        $this->setGuestUser();
+        $this->assertNull($method->invoke(null, (int) $course->id), 'A guest must be refused before any enrol plugin is asked.');
+
+        $this->setUser(0);
+        $this->assertNull($method->invoke(null, (int) $course->id), 'A visitor must be refused before any enrol plugin is asked.');
+    }
+
+    /**
      * A manager keeps seeing an unlisted course they are not enrolled in.
      *
      * Without the staff escape an unlisted course vanishes from the listing of
      * the very people who administer it: a manager is not enrolled, is not in
      * the gating cohort, and the enrol plugins answer no for them like anybody
-     * else. This was caught by running the validation matrix, not by the suite,
-     * which is why it has a test of its own.
+     * else.
      *
      * @return void
      */
@@ -532,11 +621,10 @@ final class access_test extends \advanced_testcase {
     /**
      * A course in an unlisted category is withheld from listings, but stays discoverable on its own.
      *
-     * This is the D12 split: the category term applies to filter_courses() and
-     * nothing else. is_course_discoverable() answers on the course's own state
-     * alone, because the theme's after_config guard ghosts the enrolment and
-     * hotsite pages off that method, and a listing rule must never become an
-     * enrolment block.
+     * The category term applies to filter_courses() and nothing else.
+     * is_course_discoverable() answers on the course's own state alone, because
+     * the theme's after_config guard ghosts the enrolment and hotsite pages off
+     * that method, and a listing rule must never become an enrolment block.
      *
      * @return void
      */
@@ -564,7 +652,7 @@ final class access_test extends \advanced_testcase {
             'Control: a sibling course in a listed category must survive the same filter_courses() call.'
         );
 
-        // D12: the course's OWN discoverability answer is unchanged - the split applies to listings only.
+        // The course's own discoverability answer is unchanged: the category term applies to listings only.
         $this->assertTrue(access::is_course_discoverable((int) $courseincategory->id));
     }
 
@@ -614,7 +702,7 @@ final class access_test extends \advanced_testcase {
         $course = $generator->create_course(['category' => $category->id]);
         $instance = $this->add_apply_enrol($course, 0);
         if (!$instance) {
-            $this->markTestSkipped('enrol_apply (fleet fork) is not installed.');
+            $this->markTestSkipped('enrol_apply is not installed.');
         }
         $this->set_category_unlisted((int) $category->id, true);
 
@@ -680,7 +768,7 @@ final class access_test extends \advanced_testcase {
     }
 
     /**
-     * Being able to self-enrol does not rescue a course in an unlisted category in listings (D3).
+     * Being able to self-enrol does not rescue a course in an unlisted category in listings.
      *
      * @return void
      */
@@ -705,7 +793,7 @@ final class access_test extends \advanced_testcase {
         $this->assertCount(
             0,
             access::filter_courses([(object) ['id' => (int) $course->id]]),
-            'D3: being able to self-enrol must not rescue a course in an unlisted category.'
+            'Being able to self-enrol must not rescue a course in an unlisted category.'
         );
 
         // Control: with the category listed, the same self-enrolable course is kept for the same user.
@@ -912,12 +1000,13 @@ final class access_test extends \advanced_testcase {
     }
 
     /**
-     * filter_courses_public() keeps a course only when its OWN state is public.
+     * filter_courses_public() keeps a course only when its own state is public.
      *
-     * D14 and the most-specific rule together: inside a public category, a
-     * listed course is withheld because it has no anonymous page to offer, and
-     * an unlisted course is withheld because unlisted outranks the category
-     * above it. The incoming keys and their order survive.
+     * Inside a public category, a listed course is withheld because it has no
+     * anonymous page to offer, and an unlisted course because its own state
+     * outranks the category above it. A hidden course and a course in an
+     * unlisted subcategory are withheld too. The incoming keys and their order
+     * survive.
      *
      * @return void
      */

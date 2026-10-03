@@ -25,6 +25,19 @@ Removed: the upgrade steps and the migration of the retired "unlisted" course cu
 the plugin's own table. A site that ran a pre-release build has to treat this as a fresh
 install, and set its stored plugin version back to `2026042000` before upgrading.
 
+Also in this release, from the review of the comments and tests before publication:
+
+- **Only an enrol_apply application counts as pending.** The relationship term that keeps an
+  unlisted course visible to someone who applied now matches inactive rows of `enrol_apply`
+  instances only. A suspended manual or self enrolment no longer keeps the course visible: it is
+  a decision already taken, not an application.
+- The category preview says "visible to N people while it is unlisted" instead of "currently
+  visible", because for a listed category the count is what would stay visible.
+- Tests: the guest guard of `access::viewer_context()` is pinned without `enrol_apply`, the
+  privacy userlist tests tell a detached row from a deleted one, the query-budget test measures a
+  cold call as well as a warm one, the page-size test reads `category_preview::PERPAGE`, and the
+  markup helper has a negative control.
+
 
 ### Added
 
