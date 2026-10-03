@@ -59,7 +59,7 @@ its role, and none runs on the session model (Fable).
 `main` is the 5.2 branch (`supported = [502, 502]`, `MATURITY_STABLE`) and numbers itself in the 5.2
 namespace, `20260420XX`: the first release, `v5.2-r1`, is `2026042000` (its `$plugin->requires`),
 and every later change that needs a bump adds 1 to that counter. The 5.3 branch is
-`MOODLE_503_dev` (`MATURITY_ALPHA`, `20260928XX`) and counts on its own; 4.5 and 5.1 are not
+`MOODLE_503_STABLE` (`20261005XX`) and counts on its own; 4.5 and 5.1 are not
 supported. Upgrade steps stay inside the namespace of the branch they live on. The earlier
 date-based numbers (`2026090200` to `2026091301`, releases `v5.2-r3` and `r4`) were never
 published and no longer exist; a stack or site that ran them needs its stored version set back

@@ -28,8 +28,8 @@ namespace local_unlistedcourses;
  * Decides whether the current user may discover a course.
  *
  * A course in the unlisted state ({@see discoverability}) is discoverable
- * only by someone who is actively enrolled, has an application pending, is
- * staff of the course, or could enrol right now. Everyone else must not learn
+ * only by someone who is actively enrolled, has an enrolment that starts later,
+ * has an application pending, is staff of the course, or could enrol right now. Everyone else must not learn
  * that it exists, so the answer feeds course listings, the enrolment page and
  * anything else that would otherwise print its name. The other two states
  * (listed, public) are discoverable by anybody. Whether a public course may be
@@ -55,6 +55,21 @@ namespace local_unlistedcourses;
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 class access {
+    /** Enrolment relationship: an active enrolment, inside its window. */
+    public const RELATIONSHIP_ENROLLED = 'enrolled';
+
+    /** Enrolment relationship: an active enrolment on an enabled instance whose start date is still ahead. */
+    public const RELATIONSHIP_SCHEDULED = 'scheduled';
+
+    /** Enrolment relationship: an enrol_apply row that is not active, an application awaiting a decision. */
+    public const RELATIONSHIP_PENDING = 'pending';
+
+    /** Enrolment relationship: nothing that ties the user to the course. */
+    public const RELATIONSHIP_NONE = 'none';
+
+    /** @var array Request cache of the enrolment relationship, keyed "userid:courseid" => classification. */
+    private static array $enrolmentstate = [];
+
     /** @var array Request cache of the discoverability answer, keyed "userid:courseid" => bool. */
     private static array $discoverable = [];
 
@@ -75,6 +90,7 @@ class access {
     public static function reset_caches(): void {
         self::$discoverable = [];
         self::$related = [];
+        self::$enrolmentstate = [];
         discoverability::reset_caches();
         category_access::reset_caches();
     }
@@ -283,13 +299,18 @@ class access {
      *
      * @param array $enrolledcourseids Course ids this user holds an active enrolment in.
      * @param array $pendingcourseids Course ids this user has an application awaiting a decision in.
+     * @param array $scheduledcourseids Course ids this user holds an active enrolment in that starts later.
      * @return void
      */
-    public static function prime_relationships(array $enrolledcourseids, array $pendingcourseids = []): void {
+    public static function prime_relationships(
+        array $enrolledcourseids,
+        array $pendingcourseids = [],
+        array $scheduledcourseids = []
+    ): void {
         global $USER;
 
         $viewer = (int) $USER->id;
-        foreach (array_merge($enrolledcourseids, $pendingcourseids) as $courseid) {
+        foreach (array_merge($enrolledcourseids, $pendingcourseids, $scheduledcourseids) as $courseid) {
             self::$related[self::memo_key($viewer, (int) $courseid)] = true;
         }
     }
@@ -353,16 +374,16 @@ class access {
     /**
      * Whether the current user already has a relationship with this course.
      *
-     * Enrolled, staff of it, or an application pending - the three things that
-     * keep a course on somebody's own listings whatever the category above it
-     * says. Deliberately not {@see can_enrol()}: being able to join a course is
+     * Enrolled, enrolled from a later date, staff of it, or an application pending -
+     * the things that keep a course on somebody's own listings whatever the category
+     * above it says. Deliberately not {@see can_enrol()}: being able to join a course is
      * not a relationship with it ({@see filter_courses()} says why that matters).
      *
      * Memoised per viewer and course: setUser() and "log in as" switch users
      * inside one request, and this answer is entirely a property of the viewer.
      *
      * @param int $courseid The course id.
-     * @return bool True when this user is enrolled, is staff, or has applied.
+     * @return bool True when this user is enrolled or scheduled, is staff, or has applied.
      */
     private static function has_course_relationship(int $courseid): bool {
         global $USER;
@@ -378,7 +399,7 @@ class access {
      * Work out the course relationship, with no memo in the way.
      *
      * @param int $courseid The course id.
-     * @return bool True when this user is enrolled, is staff, or has applied.
+     * @return bool True when this user is enrolled or scheduled, is staff, or has applied.
      */
     private static function compute_course_relationship(int $courseid): bool {
         global $USER;
@@ -411,7 +432,7 @@ class access {
             return true;
         }
 
-        return self::has_pending_enrolment($courseid);
+        return self::get_enrolment_state($courseid)['type'] !== self::RELATIONSHIP_NONE;
     }
 
     /**
@@ -437,38 +458,101 @@ class access {
     }
 
     /**
-     * Whether the current user has an enrol_apply application awaiting a decision in this course.
+     * Classify one user_enrolments row against a point in time.
      *
-     * A waiting application is a user_enrolments row of an enrol_apply instance with a status
-     * other than ENROL_USER_ACTIVE, so is_enrolled() with $onlyactive reports false for an
-     * applicant who is waiting for a decision. Without this term, applying to an unlisted course
-     * would make it vanish from the listing the moment the application was filed.
+     * The single owner of the rule that turns an enrolment row into a relationship with the
+     * course, so that this class and a caller that already reads the rows (a listing, a card)
+     * cannot drift apart. Pure: no database, no $USER.
      *
-     * Rows of other enrol plugins do not count: a suspended manual or self enrolment is a
-     * decision already taken, not an application, and an enrolment whose start date is still
-     * ahead is active, so this term does not match it either.
+     * - enrolled: the row is active, its instance is enabled, and now is inside its window
+     *   (a start date at or before now, no end date or one still ahead).
+     * - scheduled: the same row with a start date still ahead. Core does not call this user
+     *   enrolled yet, but an administrator decided they take part, so the course is theirs.
+     * - pending: a row of an enrol_apply instance that is not active, an application awaiting
+     *   a decision. Rows of other plugins that are not active are decisions already taken
+     *   (a suspended manual enrolment) and relate to nothing.
+     * - none: everything else, including an expired row, a row on a disabled instance and a
+     *   row whose end date precedes its start date, which core skips as well.
+     *
+     * @param \stdClass $row A user_enrolments row joined with its instance: status, timestart,
+     *        timeend, enrol (the plugin name) and instancestatus.
+     * @param int $now The time to judge against.
+     * @return array {type: one of the RELATIONSHIP_* constants, startsat: int, endsat: int}, the
+     *         dates being the row's own timestart and timeend, 0 when unset.
+     */
+    public static function classify_enrolment(\stdClass $row, int $now): array {
+        $timestart = (int) $row->timestart;
+        $timeend = (int) $row->timeend;
+        $none = ['type' => self::RELATIONSHIP_NONE, 'startsat' => 0, 'endsat' => 0];
+
+        if ($timeend !== 0 && $timeend < $timestart) {
+            return $none;
+        }
+
+        if ((int) $row->status === ENROL_USER_ACTIVE) {
+            if ((int) $row->instancestatus !== ENROL_INSTANCE_ENABLED || ($timeend !== 0 && $timeend <= $now)) {
+                return $none;
+            }
+            $type = $timestart > $now ? self::RELATIONSHIP_SCHEDULED : self::RELATIONSHIP_ENROLLED;
+            return ['type' => $type, 'startsat' => $timestart, 'endsat' => $timeend];
+        }
+
+        if ($row->enrol === 'apply') {
+            return ['type' => self::RELATIONSHIP_PENDING, 'startsat' => $timestart, 'endsat' => $timeend];
+        }
+        return $none;
+    }
+
+    /**
+     * How the current user's enrolments tie them to a course, with the dates.
+     *
+     * One statement for the course, memoised per viewer. When several rows exist the strongest
+     * wins: enrolled, then scheduled (the earliest start date), then pending. It is the payload
+     * a theme needs to say "access opens on DATE" for a course the user is already part of;
+     * rendering is the caller's. A visitor or guest, and the site course, which has no rows,
+     * answer none without a statement. Staff and "could enrol" are not enrolments and are not
+     * reported here.
      *
      * @param int $courseid The course id.
-     * @return bool True when an inactive enrol_apply row exists for this user.
+     * @return array {type: RELATIONSHIP_*, startsat: int, endsat: int}, as {@see classify_enrolment()}.
      */
-    private static function has_pending_enrolment(int $courseid): bool {
+    public static function get_enrolment_state(int $courseid): array {
         global $DB, $USER;
 
-        /* Inactive rows only, not any row: an active row is is_enrolled()'s to judge,
-           and matching it here as well would make this term subsume that check. */
-        $sql = "SELECT 1
-                  FROM {user_enrolments} ue
-                  JOIN {enrol} e ON e.id = ue.enrolid
-                 WHERE ue.userid = :userid
-                   AND e.courseid = :courseid
-                   AND e.enrol = :enrol
-                   AND ue.status <> :active";
-        return $DB->record_exists_sql($sql, [
-            'userid' => $USER->id,
-            'courseid' => $courseid,
-            'enrol' => 'apply',
-            'active' => ENROL_USER_ACTIVE,
-        ]);
+        $none = ['type' => self::RELATIONSHIP_NONE, 'startsat' => 0, 'endsat' => 0];
+        if ($courseid == SITEID || !isloggedin() || isguestuser()) {
+            return $none;
+        }
+
+        $key = self::memo_key((int) $USER->id, $courseid);
+        if (isset(self::$enrolmentstate[$key])) {
+            return self::$enrolmentstate[$key];
+        }
+
+        $rows = $DB->get_records_sql(
+            "SELECT ue.id, ue.status, ue.timestart, ue.timeend, e.enrol, e.status AS instancestatus
+               FROM {user_enrolments} ue
+               JOIN {enrol} e ON e.id = ue.enrolid
+              WHERE ue.userid = :userid
+                AND e.courseid = :courseid",
+            ['userid' => $USER->id, 'courseid' => $courseid]
+        );
+
+        $now = time();
+        $rank = [self::RELATIONSHIP_ENROLLED => 3, self::RELATIONSHIP_SCHEDULED => 2, self::RELATIONSHIP_PENDING => 1];
+        $best = $none;
+        foreach ($rows as $row) {
+            $state = self::classify_enrolment($row, $now);
+            $stronger = ($rank[$state['type']] ?? 0) > ($rank[$best['type']] ?? 0);
+            $earlier = $state['type'] === self::RELATIONSHIP_SCHEDULED && $best['type'] === self::RELATIONSHIP_SCHEDULED
+                && $state['startsat'] < $best['startsat'];
+            if ($stronger || $earlier) {
+                $best = $state;
+            }
+        }
+
+        self::$enrolmentstate[$key] = $best;
+        return $best;
     }
 
     /**

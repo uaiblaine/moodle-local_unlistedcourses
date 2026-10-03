@@ -18,7 +18,7 @@
  * Course discoverability - Plugin callbacks core looks up by name
  *
  * Only the callbacks that have no hook equivalent live here. Course deletion
- * goes through the before_course_deleted hook (db/hooks.php); category
+ * goes through the course_deleted event (db/events.php); category
  * deletion has no hook and is announced through the two legacy callbacks
  * below, which core_course_category::delete_full() and delete_move() find
  * through get_plugins_with_function().

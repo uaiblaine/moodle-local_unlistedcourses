@@ -1,4 +1,4 @@
-# Drop the pending-application term: an applicant awaiting a decision loses the
-# course the moment they apply - from the unlisted-course predicate, and from
-# the listing escape that survives an unlisted category.
-s/return self::has_pending_enrolment\(\$courseid\);/return false;/;
+# Drop the enrolment-relationship term: an applicant awaiting a decision, and a user enrolled
+# from a later date, lose the course - from the unlisted-course predicate, and from the listing
+# escape that survives an unlisted category.
+s/return self::get_enrolment_state\(\$courseid\)\['type'\] !== self::RELATIONSHIP_NONE;/return false;/;
