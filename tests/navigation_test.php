@@ -29,13 +29,12 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 /**
  * Tests for local_unlistedcourses_extend_settings_navigation().
  *
- * The callback runs on EVERY page of the site, so every test builds its own
- * fresh \moodle_page rather than reusing the global $PAGE - that is also what
- * lets one test build both a category page and a course page and compare
- * them, which a shared, already-initialised $PAGE could not do twice over.
- * Each settings_navigation is built and initialised once per assertion: the
- * class memoises "initialised" on itself, so a second find() on the same
- * instance would prove nothing about a second run of the callback.
+ * Every page under test is a fresh \moodle_page, never the global $PAGE:
+ * moodle_page::set_category_by_id() refuses a page whose course or category is
+ * already set, and some tests build a category page and a course page in one
+ * run. Each assertion also builds a new settings_navigation, because
+ * initialise() returns early on an instance already initialised, so the
+ * callback would not run a second time.
  *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine
@@ -75,15 +74,13 @@ final class navigation_test extends \advanced_testcase {
     /**
      * Build and initialise the settings navigation for one page under test.
      *
-     * THE GLOBAL $PAGE IS GIVEN A URL FIRST, and it is not the page under test.
-     * initialise() builds the user-settings branch on its way through, and two core
-     * plugins read the global page there rather than the one they were handed:
-     * tool_mfa_extend_navigation_user_settings() (admin/tool/mfa/lib.php:71) and
-     * tool_usertours\helper::bootstrap() (admin/tool/usertours/classes/helper.php:524).
-     * $FULLME is null in a CLI process, so an unset url makes moodle_page::magic_get_url()
-     * debug in every test and out_as_local_url() throw in the first one to reach the
-     * tours cache - neither about this plugin. Core's own settings_navigation_test does
-     * the same thing for the same reason (lib/tests/navigation/settings_navigation_test.php).
+     * The global $PAGE is given a URL first, although it is not the page under test:
+     * initialise() also builds the user settings branch, where
+     * {@see tool_mfa_extend_navigation_user_settings()} and
+     * {@see \tool_usertours\helper::bootstrap()} read the global $PAGE's URL. $FULLME is
+     * null under CLI, so without a URL moodle_page::magic_get_url() emits a debugging
+     * notice and the user tours cache's out_as_local_url() throws. Core's
+     * settings_navigation_test sets one for the same reason.
      *
      * @param \moodle_page $page The page whose settings navigation is wanted.
      * @return \settings_navigation The initialised tree.

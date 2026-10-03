@@ -29,16 +29,18 @@ use local_unlistedcourses\discoverability;
  *
  * The write goes through set_state() like every other writer, so the publish
  * capability is checked there, against the restoring user - the task's user,
- * not $USER - in the TARGET course. Nobody consents to publishing a course by
+ * not $USER - in the target course. Nobody consents to publishing a course by
  * restoring a backup: when set_state() refuses, the target keeps the state it
  * already had (listed for a new course, whatever it was for an overwrite) and
- * the refusal is logged. There is deliberately no clamp of an incoming PUBLIC
- * to listed ahead of that call: on an overwrite restore into an unlisted
- * course, such a clamp would have turned a refusal into an un-hiding write.
+ * the refusal is logged. There is deliberately no clamp of an incoming public
+ * state to listed ahead of that call: on an overwrite restore into an unlisted
+ * course, such a clamp would turn a refusal into an un-hiding write.
  *
- * Core processes course.xml only into a new course or when "overwrite course
- * configuration" is on, and the element is written for every course, so the
- * state follows exactly the rule core applies to the visible flag.
+ * The element is written for every course ({@see backup_local_unlistedcourses_plugin}),
+ * so the state follows the rule core applies to the visible flag - with one
+ * exception: on a tool_uploadcourse template restore, Moodle 5.2 keeps a visible
+ * value given in the CSV over the template's, and no CSV column can do the same
+ * for this state.
  *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine
@@ -66,7 +68,7 @@ class restore_local_unlistedcourses_plugin extends restore_local_plugin {
         $data = (object) $data;
         $state = (int) $data->state;
         if (!in_array($state, discoverability::states(), true)) {
-            // A value this version does not know: fail closed by leaving the default.
+            // A value this version does not know is skipped: the target keeps the state it has.
             return;
         }
 

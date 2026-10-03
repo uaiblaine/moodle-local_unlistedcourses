@@ -28,7 +28,7 @@ $capabilities = [
 
     /*
      * Make a course readable by visitors who are not logged in, on a site
-     * that forces login. Manager only, and deliberately WITHOUT
+     * that forces login. Manager only, and deliberately without
      * clonepermissionsfrom: hiding your own course is an editing act,
      * publishing it to the internet is not, and no upgrade may back-fill
      * this from moodle/course:update. RISK_SPAM because the published page
@@ -65,9 +65,9 @@ $capabilities = [
      * site that forces login. Its own capability rather than the manage one
      * above, for the reason the course side splits publish from update: hiding
      * a category from listings is an editing act, publishing it to the open web
-     * is not, and folding the second into the first would grant the larger
-     * power through a rename. Manager only, and deliberately WITHOUT
-     * clonepermissionsfrom: no upgrade may back-fill this from
+     * is not, and folding the second into the first would hand the larger power
+     * to everybody who holds the smaller one. Manager only, and deliberately
+     * without clonepermissionsfrom: no upgrade may back-fill this from
      * managecategorystate or from anything else. RISK_SPAM because the
      * published page carries author-written text to the open web; no
      * RISK_PERSONAL, unlike the course capability, because a category page

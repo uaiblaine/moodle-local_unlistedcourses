@@ -48,11 +48,8 @@
     * nobodywarning - bool, unlisted and visible to nobody besides staff.
     * themewarning - bool, category themes are enabled on this site.
 
-    The example context below exercises the UNLISTED branch, and one context is all the
-    lint renders: the two branches are mutually exclusive, so whichever it is given, the
-    other one's markup is never parsed by the gate. The public branch's markup is checked
-    instead by category_preview_test, which renders this template with a public context and
-    asserts the result is well formed - see that test for why the check exists here at all.
+    The example context below exercises the unlisted branch, the only one the mustache lint
+    renders. category_preview_test renders the public branch and asserts it is well formed.
 
     Example context (json):
     {
