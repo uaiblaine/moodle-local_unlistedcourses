@@ -260,13 +260,13 @@ final class category_preview_test extends \advanced_testcase {
         $category = $this->getDataGenerator()->create_category();
         $context = \core\context\coursecat::instance($category->id);
 
-        // One more cohort than fits on a page: the counts below assume category_preview::PERPAGE is 100.
-        for ($i = 1; $i <= 101; $i++) {
+        // One more cohort than fits on a page.
+        for ($i = 1; $i <= category_preview::PERPAGE + 1; $i++) {
             $this->create_cohort_at($context, sprintf('Cohort %03d', $i));
         }
 
         $data = $this->export($category, $context);
-        $this->assertCount(100, $data['cohorts'], 'The listing must stop at the page size.');
+        $this->assertCount(category_preview::PERPAGE, $data['cohorts'], 'The listing must stop at the page size.');
         $this->assertSame(1, $data['cohortsmore']);
     }
 
@@ -660,5 +660,24 @@ final class category_preview_test extends \advanced_testcase {
         libxml_use_internal_errors($previous);
 
         $this->assertNotFalse($parsed, $message . ' did not parse: ' . implode('; ', $errors));
+    }
+
+    /**
+     * The well-formedness helper rejects a fragment with a mismatched tag.
+     *
+     * Without this control a helper that accepted anything would let the positive checks pass.
+     *
+     * @return void
+     */
+    public function test_the_well_formedness_helper_rejects_a_malformed_fragment(): void {
+        $this->assert_well_formed('<div><p>text</p></div>', 'The control fragment');
+
+        $failed = false;
+        try {
+            $this->assert_well_formed('<div><p>text</div>', 'The malformed fragment');
+        } catch (\PHPUnit\Framework\AssertionFailedError $e) {
+            $failed = true;
+        }
+        $this->assertTrue($failed, 'The helper must fail on a fragment whose tags do not match.');
     }
 }

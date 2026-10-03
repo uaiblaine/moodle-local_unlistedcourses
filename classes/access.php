@@ -437,16 +437,19 @@ class access {
     }
 
     /**
-     * Whether the current user holds an inactive enrolment row in this course.
+     * Whether the current user has an enrol_apply application awaiting a decision in this course.
      *
-     * An enrol_apply application in the waiting state is a user_enrolments row
-     * with a status other than ENROL_USER_ACTIVE, so is_enrolled() with
-     * $onlyactive reports false for an applicant who is waiting for a decision.
-     * Without this term, applying to an unlisted course would make it vanish
-     * from the listing the moment the application was filed.
+     * A waiting application is a user_enrolments row of an enrol_apply instance with a status
+     * other than ENROL_USER_ACTIVE, so is_enrolled() with $onlyactive reports false for an
+     * applicant who is waiting for a decision. Without this term, applying to an unlisted course
+     * would make it vanish from the listing the moment the application was filed.
+     *
+     * Rows of other enrol plugins do not count: a suspended manual or self enrolment is a
+     * decision already taken, not an application, and an enrolment whose start date is still
+     * ahead is active, so this term does not match it either.
      *
      * @param int $courseid The course id.
-     * @return bool True when an inactive enrolment row exists for this user.
+     * @return bool True when an inactive enrol_apply row exists for this user.
      */
     private static function has_pending_enrolment(int $courseid): bool {
         global $DB, $USER;
@@ -458,10 +461,12 @@ class access {
                   JOIN {enrol} e ON e.id = ue.enrolid
                  WHERE ue.userid = :userid
                    AND e.courseid = :courseid
+                   AND e.enrol = :enrol
                    AND ue.status <> :active";
         return $DB->record_exists_sql($sql, [
             'userid' => $USER->id,
             'courseid' => $courseid,
+            'enrol' => 'apply',
             'active' => ENROL_USER_ACTIVE,
         ]);
     }

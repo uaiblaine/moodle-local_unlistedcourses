@@ -239,7 +239,7 @@ final class backup_restore_test extends \advanced_testcase {
      *
      * @return void
      */
-    public function test_public_is_clamped_for_a_restorer_who_may_not_publish(): void {
+    public function test_public_is_refused_for_a_restorer_who_may_not_publish(): void {
         global $DB;
 
         $this->resetAfterTest();
