@@ -34,4 +34,4 @@ jobs:
     name: Moodle 5.03 dev
     uses: moodle-an-hochschulen/moodle-workflows/.github/workflows/moodle-plugin-ci.yml@main
     with:
-      moodle-core-branch: main
+      moodle-core-branch: MOODLE_503_STABLE

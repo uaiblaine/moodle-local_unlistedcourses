@@ -6,12 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-Version `2026092800`, release `v5.3-dev`, `MATURITY_ALPHA`: the Moodle 5.3 development branch
-(`MOODLE_503_dev`), numbered in the 5.3 namespace (`20260928XX`) until the release fixes the
-date. It is the 5.2 code unchanged apart from `version.php`, the single CI job against core
-`main` and the README compatibility line. Known gap before any stable 5.3 release: with
-asynchronous course deletion on, `before_course_deleted` runs when the deletion is requested,
-so a course can be listed again until the cron deletes it.
+Version `2026100500`, release `v5.3-r1`, `MATURITY_ALPHA`: the Moodle 5.3 branch
+(`MOODLE_503_STABLE`), numbered in the 5.3 namespace (`20261005XX`, the core version 5.3.0
+shipped with). It is the 5.2 code unchanged apart from `version.php`, the single CI job against
+core `MOODLE_503_STABLE` and the README compatibility line. Known gap before a stable release:
+with asynchronous course deletion on, `before_course_deleted` runs when the deletion is
+requested, so a course can be listed again until the cron deletes it.
 
 ## v5.2-r1 (2026042000) - 2026-10-02
 
