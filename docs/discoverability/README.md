@@ -292,13 +292,13 @@ Delivered in the working tree of `local_unlistedcourses`, not yet committed, pen
   `db/access.php`, `db/hooks.php`.
 - `classes/discoverability.php`, `classes/event/course_state_updated.php`,
   `classes/hook_callbacks.php`, `classes/local/courseform.php`,
-  `classes/local/legacy_field.php`, a full privacy provider, and
+  a full privacy provider, and
   `backup/moodle2/{backup,restore}_local_unlistedcourses_plugin.class.php`.
 - `access.php` rewired onto `discoverability::get_states()`; `fields.php` and
   `db/install.php` removed.
 - Tests: `discoverability_test`, `local/courseform_test` (hook wiring proven through
   `create_course()` / `update_course()`), `backup_restore_test`, `privacy/provider_test`,
-  `local/legacy_field_test`, `access_test` adapted, and `tests/behat/discoverability.feature`.
+  `access_test` adapted, and `tests/behat/discoverability.feature`.
   Ten new mutations in `mutations/gates.conf`.
 
 **One deviation from section 4, with the reason.** Item 2 says the capability check lives
