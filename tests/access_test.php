@@ -778,12 +778,18 @@ final class access_test extends \advanced_testcase {
         // A row of the viewer's own, ended so that it is no relationship: the page offers no payment.
         $now = time();
         $holder = $this->add_enrolment_row((int) $instance->id, ENROL_USER_ACTIVE, $now - 10 * DAYSECS, $now - 5 * DAYSECS);
+        // Working towards the prerequisite, so that only the holder's own row withholds the course.
+        $generator->enrol_user($holder->id, $prerequisite->id);
         $this->setUser($holder);
         access::reset_caches();
         $this->assertSame(
             access::RELATIONSHIP_NONE,
             access::get_enrolment_state((int) $course->id)['type'],
             'Precondition: an enrolment whose end date has passed is no relationship.'
+        );
+        $this->assertTrue(
+            is_enrolled(\core\context\course::instance((int) $prerequisite->id), $holder, '', true),
+            'Precondition: the holder is working towards the prerequisite, so the prerequisite term holds.'
         );
         $this->assertFalse(
             access::is_course_discoverable((int) $course->id),
@@ -932,12 +938,18 @@ final class access_test extends \advanced_testcase {
 
         $now = time();
         $holder = $this->add_enrolment_row((int) $instance->id, ENROL_USER_ACTIVE, $now - 10 * DAYSECS, $now - 5 * DAYSECS);
+        // Working towards the prerequisite, so that only the holder's own row withholds the course.
+        $generator->enrol_user($holder->id, $prerequisite->id);
         $this->setUser($holder);
         access::reset_caches();
         $this->assertSame(
             access::RELATIONSHIP_NONE,
             access::get_enrolment_state((int) $course->id)['type'],
             'Precondition: an enrolment whose end date has passed is no relationship.'
+        );
+        $this->assertTrue(
+            is_enrolled(\core\context\course::instance((int) $prerequisite->id), $holder, '', true),
+            'Precondition: the holder is working towards the prerequisite, so the prerequisite term holds.'
         );
         $this->assertFalse(
             access::is_course_discoverable((int) $course->id),
