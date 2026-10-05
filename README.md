@@ -59,7 +59,8 @@ Somebody may discover an unlisted course when any of these holds:
   instance; any enabled guest instance, with or without a key; and `enrol_autoenrol`'s own
   `enrol_allowed()`;
 - they will be enrolled by `enrol_coursecompleted` once they complete another course: an
-  instance inside its enrolment window on which they hold no row;
+  instance inside its enrolment window on which they hold no row, for a viewer actively enrolled in
+  the prerequisite course the instance names;
 - they are staff - `moodle/course:view` or `moodle/course:viewhiddencourses` on the course.
 
 The gate itself is native: `enrol.customint5`, the "only cohort members" field both enrol

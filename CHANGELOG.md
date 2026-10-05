@@ -32,7 +32,8 @@ Version `2026042002`. The scheduled-enrolment and course-deletion entries below 
   instance), enter it as a guest (an enabled guest instance, with or without a key), be enrolled
   by `enrol_autoenrol` (the plugin's own `enrol_allowed()` rule), or who will be enrolled by
   `enrol_coursecompleted` once they complete another course (an instance inside its enrolment
-  window, no row of theirs on it). These courses used to be hidden from exactly the people they
+  window, no row of theirs on it, and an active enrolment of theirs in the prerequisite course it
+  names; anyone else has no tie to that course and does not find this one). These courses used to be hidden from exactly the people they
   were open to.
 - **An enrolment that starts later is a relationship with the course.** A user enrolled with a
   start date still ahead (a manual enrolment scheduled by an administrator, say) is not "enrolled"
