@@ -552,6 +552,400 @@ final class access_test extends \advanced_testcase {
     }
 
     /**
+     * Add an instance of any enrol plugin to a course, enabling the plugin site-wide first.
+     *
+     * A fresh test site enables manual, guest, self and cohort only, and enrol_get_instances()
+     * drops the instances of a plugin that is not enabled, so the predicate would answer "no
+     * route" for a reason that has nothing to do with the instance.
+     *
+     * @param \stdClass $course The course.
+     * @param string $enrol The plugin name.
+     * @param array $fields Instance fields; the instance is enabled whatever they say.
+     * @return \stdClass|null The instance record, or null when the plugin is not installed.
+     */
+    private function add_enrol_instance(\stdClass $course, string $enrol, array $fields): ?\stdClass {
+        global $DB;
+
+        $plugin = enrol_get_plugin($enrol);
+        if (!$plugin) {
+            return null;
+        }
+
+        $enabled = array_keys(enrol_get_plugins(true));
+        if (!in_array($enrol, $enabled, true)) {
+            $enabled[] = $enrol;
+            set_config('enrol_plugins_enabled', implode(',', $enabled));
+        }
+
+        $instanceid = $plugin->add_instance($course, ['status' => ENROL_INSTANCE_ENABLED] + $fields);
+        return $DB->get_record('enrol', ['id' => $instanceid], '*', MUST_EXIST);
+    }
+
+    /**
+     * Delete every enrolment instance of a course except one, so no other route can answer.
+     *
+     * @param \stdClass $course The course.
+     * @param int $keepid The id of the instance to keep.
+     * @return void
+     */
+    private function keep_only_instance(\stdClass $course, int $keepid): void {
+        foreach (enrol_get_instances($course->id, false) as $instance) {
+            if ((int) $instance->id !== $keepid) {
+                enrol_get_plugin($instance->enrol)->delete_instance($instance);
+            }
+        }
+    }
+
+    /**
+     * A new user holding one user_enrolments row on an instance, written straight to the table.
+     *
+     * Straight to the table so that no plugin's enrol_user() adds roles, groups or messages the
+     * predicate does not read.
+     *
+     * @param int $enrolid The instance id.
+     * @param int $status The row status.
+     * @param int $timestart The start date.
+     * @param int $timeend The end date.
+     * @return \stdClass The user.
+     */
+    private function add_enrolment_row(int $enrolid, int $status, int $timestart, int $timeend): \stdClass {
+        global $DB;
+
+        $user = $this->getDataGenerator()->create_user();
+        $DB->insert_record('user_enrolments', (object) [
+            'enrolid' => $enrolid,
+            'userid' => $user->id,
+            'status' => $status,
+            'timestart' => $timestart,
+            'timeend' => $timeend,
+            'modifierid' => 0,
+            'timecreated' => time(),
+            'timemodified' => time(),
+        ]);
+        return $user;
+    }
+
+    /**
+     * An application whose end date has passed no longer keeps an unlisted course, and a waiting-list row does.
+     *
+     * The rule is enrol_apply's own queue: an approved enrolment that the expiry sweep suspended
+     * after its end date has the status of a fresh application, and only the end date tells the
+     * two apart. The instance is written straight to the tables, as in the test above, so the
+     * test does not need that plugin. The controls run in the same test: an application with no
+     * end date and a waiting-list row both keep the course.
+     *
+     * @return void
+     */
+    public function test_an_application_whose_end_date_has_passed_no_longer_keeps_an_unlisted_course(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $course = $generator->create_course();
+        // A cohort gate nobody passes, so that can_enrol() cannot be what keeps the course visible.
+        $this->add_self_enrol($course, (int) $generator->create_cohort()->id);
+        $this->set_unlisted((int) $course->id, true);
+
+        $now = time();
+        $applyid = (int) $DB->insert_record('enrol', (object) [
+            'enrol' => 'apply',
+            'courseid' => $course->id,
+            'status' => ENROL_INSTANCE_ENABLED,
+            'sortorder' => 99,
+            'timecreated' => $now,
+            'timemodified' => $now,
+        ]);
+
+        $lapsed = $this->add_enrolment_row($applyid, ENROL_USER_SUSPENDED, $now - 10 * DAYSECS, $now - 5 * DAYSECS);
+        $this->setUser($lapsed);
+        access::reset_caches();
+        $this->assertSame(access::RELATIONSHIP_NONE, access::get_enrolment_state((int) $course->id)['type']);
+        $this->assertFalse(
+            access::is_course_discoverable((int) $course->id),
+            'An enrolment suspended after its end date is not an application awaiting a decision.'
+        );
+
+        // Control: an application with no end date is awaiting a decision and keeps the course.
+        $waiting = $this->add_enrolment_row($applyid, ENROL_USER_SUSPENDED, 0, 0);
+        $this->setUser($waiting);
+        access::reset_caches();
+        $this->assertSame(access::RELATIONSHIP_PENDING, access::get_enrolment_state((int) $course->id)['type']);
+        $this->assertTrue(access::is_course_discoverable((int) $course->id), 'Control: a waiting application keeps the course.');
+
+        // Control: so does a row on enrol_apply's waiting list (status 2).
+        $deferred = $this->add_enrolment_row($applyid, 2, 0, 0);
+        $this->setUser($deferred);
+        access::reset_caches();
+        $this->assertSame(access::RELATIONSHIP_PENDING, access::get_enrolment_state((int) $course->id)['type']);
+        $this->assertTrue(access::is_course_discoverable((int) $course->id), 'Control: a waiting-list row keeps the course.');
+    }
+
+    /**
+     * An apply instance on which the viewer already holds a row is no route in for them.
+     *
+     * The viewer's approved enrolment ended under enrol_apply's default expiry action, which
+     * leaves the row active: no relationship, and allow_apply() still says yes because it never
+     * looks for the viewer's own row. enrol_apply takes no second application on that instance,
+     * so the course must not stay discoverable for them on the strength of it. The control is a
+     * user with no row on the same instance, in the same run.
+     *
+     * @return void
+     */
+    public function test_an_apply_instance_holding_the_viewers_own_row_is_no_route_in(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $course = $generator->create_course();
+        $instance = $this->add_apply_enrol($course, 0);
+        if (!$instance) {
+            $this->markTestSkipped('enrol_apply is not installed.');
+        }
+        $this->keep_only_instance($course, (int) $instance->id);
+        $this->set_unlisted((int) $course->id, true);
+
+        $now = time();
+        $holder = $this->add_enrolment_row((int) $instance->id, ENROL_USER_ACTIVE, $now - 10 * DAYSECS, $now - 5 * DAYSECS);
+        $this->setUser($holder);
+        access::reset_caches();
+        $this->assertSame(
+            access::RELATIONSHIP_NONE,
+            access::get_enrolment_state((int) $course->id)['type'],
+            'Precondition: an enrolment whose end date has passed is no relationship.'
+        );
+        $this->assertTrue(
+            enrol_get_plugin('apply')->allow_apply($instance) === true,
+            'Precondition: allow_apply() on its own would let the holder apply.'
+        );
+        $this->assertFalse(
+            access::is_course_discoverable((int) $course->id),
+            'An instance the viewer already holds a row on is no route in.'
+        );
+
+        // Control: the same instance is a route in for somebody with no row on it.
+        $this->setUser($generator->create_user());
+        access::reset_caches();
+        $this->assertTrue(
+            access::is_course_discoverable((int) $course->id),
+            'Control: the apply instance must admit a user with no row on it.'
+        );
+    }
+
+    /**
+     * The two payment methods, which share one branch of the predicate.
+     *
+     * @return array Name => [enrol plugin name].
+     */
+    public static function payment_method_provider(): array {
+        return [
+            'fee' => ['fee'],
+            'paypal' => ['paypal'],
+        ];
+    }
+
+    /**
+     * A fee or paypal instance is a route in while its enrolment page would offer to take payment.
+     *
+     * Each condition of the page is switched off in turn and back on, and the route is asked for
+     * after each: a row of the viewer's own on the instance, the window, and the price, with the
+     * site default price standing in for an instance that has none.
+     *
+     * @param string $enrol The enrol plugin name.
+     * @return void
+     */
+    #[DataProvider('payment_method_provider')]
+    public function test_a_payment_instance_is_a_route_in_while_it_would_take_payment(string $enrol): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $course = $generator->create_course();
+        $instance = $this->add_enrol_instance($course, $enrol, ['cost' => 10, 'currency' => 'USD']);
+        $this->keep_only_instance($course, (int) $instance->id);
+        $this->set_unlisted((int) $course->id, true);
+        $plugin = enrol_get_plugin($enrol);
+        $plugin->set_config('cost', 0);
+
+        $viewer = $generator->create_user();
+        $this->setUser($viewer);
+        access::reset_caches();
+        $this->assertTrue(
+            access::is_course_discoverable((int) $course->id),
+            'A priced instance with its window open is a route in.'
+        );
+
+        // A row of the viewer's own, ended so that it is no relationship: the page offers no payment.
+        $now = time();
+        $holder = $this->add_enrolment_row((int) $instance->id, ENROL_USER_ACTIVE, $now - 10 * DAYSECS, $now - 5 * DAYSECS);
+        $this->setUser($holder);
+        access::reset_caches();
+        $this->assertSame(
+            access::RELATIONSHIP_NONE,
+            access::get_enrolment_state((int) $course->id)['type'],
+            'Precondition: an enrolment whose end date has passed is no relationship.'
+        );
+        $this->assertFalse(
+            access::is_course_discoverable((int) $course->id),
+            'An instance the viewer already holds a row on is no route in.'
+        );
+
+        $this->setUser($viewer);
+        $DB->set_field('enrol', 'enrolstartdate', $now + DAYSECS, ['id' => $instance->id]);
+        access::reset_caches();
+        $this->assertFalse(access::is_course_discoverable((int) $course->id), 'Before the window opens it is no route in.');
+
+        $DB->set_field('enrol', 'enrolstartdate', 0, ['id' => $instance->id]);
+        $DB->set_field('enrol', 'enrolenddate', $now - DAYSECS, ['id' => $instance->id]);
+        access::reset_caches();
+        $this->assertFalse(access::is_course_discoverable((int) $course->id), 'After the window closes it is no route in.');
+
+        // No price of its own and none by default: the page shows an error instead of a button.
+        $DB->set_field('enrol', 'enrolenddate', 0, ['id' => $instance->id]);
+        $DB->set_field('enrol', 'cost', '0', ['id' => $instance->id]);
+        access::reset_caches();
+        $this->assertFalse(access::is_course_discoverable((int) $course->id), 'An instance with no price is no route in.');
+
+        // Control: the site default price applies to an instance that has none.
+        $plugin->set_config('cost', 15);
+        access::reset_caches();
+        $this->assertTrue(
+            access::is_course_discoverable((int) $course->id),
+            'Control: with the site default price the same instance is a route in again.'
+        );
+    }
+
+    /**
+     * An enabled guest instance is a route in for a logged-in user, whether or not it asks for a key.
+     *
+     * Core's require_login() offers guest access to any user who is not enrolled, so the course
+     * is one the viewer may enter. A key is asked for on entry and does not change that.
+     *
+     * @return void
+     */
+    public function test_an_enabled_guest_instance_is_a_route_in(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $course = $generator->create_course();
+        $guest = $DB->get_record('enrol', ['courseid' => $course->id, 'enrol' => 'guest'], '*', MUST_EXIST);
+        $this->keep_only_instance($course, (int) $guest->id);
+        $DB->set_field('enrol', 'status', ENROL_INSTANCE_DISABLED, ['id' => $guest->id]);
+        $this->set_unlisted((int) $course->id, true);
+
+        $this->setUser($generator->create_user());
+        access::reset_caches();
+        $this->assertFalse(
+            access::is_course_discoverable((int) $course->id),
+            'Control: a disabled guest instance is no route in.'
+        );
+
+        $DB->set_field('enrol', 'status', ENROL_INSTANCE_ENABLED, ['id' => $guest->id]);
+        access::reset_caches();
+        $this->assertTrue(access::is_course_discoverable((int) $course->id), 'An enabled guest instance is a route in.');
+
+        $DB->set_field('enrol', 'password', 'secret', ['id' => $guest->id]);
+        access::reset_caches();
+        $this->assertTrue(
+            access::is_course_discoverable((int) $course->id),
+            'A guest instance that asks for a key is still a route in.'
+        );
+    }
+
+    /**
+     * An autoenrol instance is a route in while the plugin's own rule admits the viewer.
+     *
+     * The control switches off one condition only that plugin knows about, new enrolments, so
+     * the answer can only have come from asking the plugin.
+     *
+     * @return void
+     */
+    public function test_an_autoenrol_instance_is_a_route_in_while_its_rule_admits_the_viewer(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $course = $generator->create_course();
+        $instance = $this->add_enrol_instance($course, 'autoenrol', ['customint1' => 0, 'customint4' => 1, 'customint8' => 0]);
+        if (!$instance || !is_callable([enrol_get_plugin('autoenrol'), 'enrol_allowed'])) {
+            $this->markTestSkipped('enrol_autoenrol, with enrol_allowed(), is not installed.');
+        }
+        $this->keep_only_instance($course, (int) $instance->id);
+        $this->set_unlisted((int) $course->id, true);
+
+        $this->setUser($generator->create_user());
+        access::reset_caches();
+        $this->assertTrue(
+            access::is_course_discoverable((int) $course->id),
+            'An instance whose rule admits the viewer is a route in.'
+        );
+
+        $DB->set_field('enrol', 'customint4', 0, ['id' => $instance->id]);
+        access::reset_caches();
+        $this->assertFalse(
+            access::is_course_discoverable((int) $course->id),
+            'With new enrolments off the plugin admits nobody, and the instance is no route in.'
+        );
+    }
+
+    /**
+     * A course completed instance keeps the course discoverable while its enrolment window is open.
+     *
+     * It enrols nobody now; the viewer will be enrolled on completing the course it names. A row
+     * of the viewer's own on the instance, and a closed window, each end that.
+     *
+     * @return void
+     */
+    public function test_a_course_completed_instance_keeps_the_course_discoverable_while_its_window_is_open(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $prerequisite = $generator->create_course();
+        $course = $generator->create_course();
+        $instance = $this->add_enrol_instance($course, 'coursecompleted', ['customint1' => $prerequisite->id]);
+        if (!$instance) {
+            $this->markTestSkipped('enrol_coursecompleted is not installed.');
+        }
+        $this->keep_only_instance($course, (int) $instance->id);
+        $this->set_unlisted((int) $course->id, true);
+
+        $viewer = $generator->create_user();
+        $this->setUser($viewer);
+        access::reset_caches();
+        $this->assertTrue(
+            access::is_course_discoverable((int) $course->id),
+            'A viewer who will be enrolled on completing the prerequisite may find the course.'
+        );
+
+        $now = time();
+        $holder = $this->add_enrolment_row((int) $instance->id, ENROL_USER_ACTIVE, $now - 10 * DAYSECS, $now - 5 * DAYSECS);
+        $this->setUser($holder);
+        access::reset_caches();
+        $this->assertSame(
+            access::RELATIONSHIP_NONE,
+            access::get_enrolment_state((int) $course->id)['type'],
+            'Precondition: an enrolment whose end date has passed is no relationship.'
+        );
+        $this->assertFalse(
+            access::is_course_discoverable((int) $course->id),
+            'An instance the viewer already holds a row on is no route in.'
+        );
+
+        $this->setUser($viewer);
+        $DB->set_field('enrol', 'enrolenddate', $now - DAYSECS, ['id' => $instance->id]);
+        access::reset_caches();
+        $this->assertFalse(
+            access::is_course_discoverable((int) $course->id),
+            'After the window closes the instance enrols nobody, and it is no route in.'
+        );
+    }
+
+    /**
      * The guard in access::viewer_context() answers null for a guest and for nobody logged in.
      *
      * The outcome tests cannot hold the guard when enrol_apply is not installed, because core refuses
@@ -586,6 +980,8 @@ final class access_test extends \advanced_testcase {
         $off = ENROL_USER_SUSPENDED;
         $enabled = ENROL_INSTANCE_ENABLED;
         $disabled = ENROL_INSTANCE_DISABLED;
+        // The waiting-list status of enrol_apply, whose constant is not defined on a site without that plugin.
+        $wait = 2;
         $e = access::RELATIONSHIP_ENROLLED;
         $s = access::RELATIONSHIP_SCHEDULED;
         $p = access::RELATIONSHIP_PENDING;
@@ -606,6 +1002,13 @@ final class access_test extends \advanced_testcase {
             'suspended self' => [$off, 0, 0, 'self', $enabled, $n, 0, 0],
             'waiting application' => [$off, 0, 0, 'apply', $enabled, $p, 0, 0],
             'approved application, started' => [$on, 0, 0, 'apply', $enabled, $e, 0, 0],
+            'application with an end date ahead' => [$off, $now - 90, $now + 10, 'apply', $enabled, $p, $now - 90, $now + 10],
+            'application whose end date has passed' => [$off, $now - 90, $now - 10, 'apply', $enabled, $n, 0, 0],
+            'application ending right now' => [$off, 0, $now, 'apply', $enabled, $n, 0, 0],
+            'application, end before start' => [$off, $now + 50, $now + 10, 'apply', $enabled, $p, $now + 50, $now + 10],
+            'application on a disabled instance' => [$off, 0, 0, 'apply', $disabled, $p, 0, 0],
+            'waiting list' => [$wait, 0, 0, 'apply', $enabled, $p, 0, 0],
+            'waiting list whose end date has passed' => [$wait, 0, $now - 10, 'apply', $enabled, $n, 0, 0],
         ];
     }
 

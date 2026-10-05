@@ -6,14 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-Version `2026100501`, `MATURITY_STABLE`: the Moodle 5.3 branch (`MOODLE_503_STABLE`), numbered in
+Version `2026100502`, `MATURITY_STABLE`: the Moodle 5.3 branch (`MOODLE_503_STABLE`), numbered in
 the 5.3 namespace (`20261005XX`, the core version 5.3.0 shipped with). It is the 5.2 code with its
 own `version.php`, the single CI job against core `MOODLE_503_STABLE` and the README compatibility
-line. The asynchronous-deletion gap that kept it alpha is closed by the change below, and a test
-that runs the real asynchronous path pins it.
+line. The asynchronous-deletion gap that kept it alpha is closed by the course-deletion change
+below, and a test that runs the real asynchronous path pins it. The enrolment fixes and the new
+routes below are `2026100502`; the rest was `2026100501`.
+
+### Fixed
+
+- **An application whose end date has passed is no longer pending.** A row of an `enrol_apply`
+  instance that is not active now counts as an application awaiting a decision only while its end
+  date is unset or still ahead, which is `enrol_apply`'s own queue rule. An approved enrolment
+  that the expiry sweep suspended after its end date read like a fresh application: it kept an
+  unlisted course discoverable and the theme's course card said it was under review. It now
+  relates to nothing. A row on the waiting list is still pending.
+- **An `enrol_apply` instance on which the viewer already holds a row is no longer a way in.**
+  `enrol_apply` takes no second application on that instance, so a learner whose approved
+  enrolment had ended kept an unlisted course discoverable through an application they could not
+  make.
+- The help of the course and category discoverability settings names an enrolment that starts
+  later as one of the relationships that keep an unlisted course visible.
 
 ### Changed
 
+- **More enrolment methods are a way into an unlisted course.** Besides self enrolment and
+  `enrol_apply`, an unlisted course is now discoverable to a logged-in user who could pay for it
+  (`enrol_fee` and `enrol_paypal`: the enrolment window open, a price, no row of theirs on the
+  instance), enter it as a guest (an enabled guest instance, with or without a key), be enrolled
+  by `enrol_autoenrol` (the plugin's own `enrol_allowed()` rule), or who will be enrolled by
+  `enrol_coursecompleted` once they complete another course (an instance inside its enrolment
+  window, no row of theirs on it). These courses used to be hidden from exactly the people they
+  were open to.
 - **An enrolment that starts later is a relationship with the course.** A user enrolled with a
   start date still ahead (a manual enrolment scheduled by an administrator, say) is not "enrolled"
   to core until that date, which used to ghost an unlisted course for exactly the people who were
