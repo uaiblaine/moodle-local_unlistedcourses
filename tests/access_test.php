@@ -892,7 +892,8 @@ final class access_test extends \advanced_testcase {
     }
 
     /**
-     * A course completed instance keeps the course discoverable while its enrolment window is open.
+     * A course completed instance keeps the course discoverable for a viewer working towards its
+     * prerequisite, while its enrolment window is open.
      *
      * It enrols nobody now; the viewer will be enrolled on completing the course it names. A row
      * of the viewer's own on the instance, and a closed window, each end that.
@@ -916,6 +917,13 @@ final class access_test extends \advanced_testcase {
 
         $viewer = $generator->create_user();
         $this->setUser($viewer);
+        access::reset_caches();
+        $this->assertFalse(
+            access::is_course_discoverable((int) $course->id),
+            'A viewer with no enrolment in the prerequisite has no tie to it and may not find the course.'
+        );
+
+        $generator->enrol_user($viewer->id, $prerequisite->id);
         access::reset_caches();
         $this->assertTrue(
             access::is_course_discoverable((int) $course->id),

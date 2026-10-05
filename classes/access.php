@@ -584,8 +584,10 @@ class access {
      * - autoenrol: the plugin's own enrol_allowed(), the check behind its enrolment page and its
      *   enrol-me link: its rule, its window, its limit and the viewer's existing enrolments.
      * - coursecompleted: an instance inside its enrolment window on which the viewer holds no
-     *   row. It enrols nobody now, but the viewer will be enrolled on completing the course it
-     *   names, which is reason enough to let them find this one.
+     *   row, for a viewer actively enrolled in the course it names. It enrols nobody now, but that
+     *   viewer will be enrolled on completing the prerequisite, which is reason enough to let them
+     *   find this one; anyone else has no tie to the prerequisite, and naming the course to them
+     *   would defeat the unlisting.
      *
      * The methods outside core are optional here. allow_apply() and enrol_allowed() are called
      * through the plugin object behind is_callable(), because a build without them may be
@@ -660,7 +662,15 @@ class access {
             }
 
             if ($instance->enrol === 'coursecompleted') {
-                if (!self::holds_enrolment($instance) && self::inside_window($instance, $now)) {
+                // The prerequisite is the course the instance names (customint1); only a viewer
+                // working towards it is promised this one.
+                $prerequisite = \core\context\course::instance((int) $instance->customint1, IGNORE_MISSING);
+                if (
+                    $prerequisite
+                    && is_enrolled($prerequisite, $USER, '', true)
+                    && !self::holds_enrolment($instance)
+                    && self::inside_window($instance, $now)
+                ) {
                     return true;
                 }
                 continue;
