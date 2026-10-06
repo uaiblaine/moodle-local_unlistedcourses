@@ -9,7 +9,7 @@ stored in the plugin's own table and edited from the course settings form:
 | State | Meaning |
 |---|---|
 | **Listed** (default, no row) | A course like any other. |
-| **Unlisted** | Named only to people who are actively enrolled, have an application awaiting a decision, could enrol right now, or are staff. The course stays `visible = 1` and keeps working through a direct link; it simply stops being named to anyone who is not entitled to it. |
+| **Unlisted** | Named only to people who are enrolled (also from a later date), have an application awaiting a decision, could enrol right now, will be enrolled once they complete another course, or are staff. The course stays `visible = 1` and keeps working through a direct link; it simply stops being named to anyone who is not entitled to it. |
 | **Public** | In addition to being listed, the course's landing page may be served to visitors who are **not logged in**, on a site that keeps `forcelogin = 1` - so a link pasted into a messaging app shows a preview. |
 
 The component name is narrower than its scope. It was born as "unlisted courses" and now
@@ -48,11 +48,19 @@ too. It is keyed by the viewer and dropped by `reset_caches()`.
 
 Somebody may discover an unlisted course when any of these holds:
 
-- they are actively enrolled;
-- they have an application awaiting a decision (an `enrol_apply` row that is not active -
-  without this term, applying would make the course vanish the moment you applied);
-- they could enrol right now - `enrol_self::can_self_enrol()` or, for the fleet's
-  `enrol_apply` fork, `allow_apply()` plus the applicant cap that lives outside it;
+- they are actively enrolled, or enrolled on an enabled instance from a start date still ahead;
+- they have an application awaiting a decision - an `enrol_apply` row that is not active and
+  whose end date is unset or still ahead, which is `enrol_apply`'s own queue rule (without this
+  term, applying would make the course vanish the moment you applied);
+- they could enrol right now, each method asked what its own enrolment page asks:
+  `enrol_self::can_self_enrol()`; for the fleet's `enrol_apply` fork, `allow_apply()` plus the
+  applicant cap that lives outside it, on an instance where they hold no row yet; for
+  `enrol_fee` and `enrol_paypal`, the enrolment window open, a price, and no row of theirs on the
+  instance; any enabled guest instance, with or without a key; and `enrol_autoenrol`'s own
+  `enrol_allowed()`;
+- they will be enrolled by `enrol_coursecompleted` once they complete another course: an
+  instance inside its enrolment window on which they hold no row, for a viewer actively enrolled in
+  the prerequisite course the instance names;
 - they are staff - `moodle/course:view` or `moodle/course:viewhiddencourses` on the course.
 
 The gate itself is native: `enrol.customint5`, the "only cohort members" field both enrol

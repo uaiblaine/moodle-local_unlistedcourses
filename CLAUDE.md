@@ -182,9 +182,11 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   may not publish is refused.
 - **`enrol_apply` is absent from a fresh test site's `enrol_plugins_enabled`** —
   `add_apply_enrol()` in `access_test` enables it first.
-- **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds fifty-five
-  guards, and each must redden a test. Adding a guard without a mutation is how untested
-  ones get in. The first sweep found one that reddened nothing — the restore clamp above —
+- **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds seventy-two
+  guards, and each must redden a test. The apply, autoenrol and coursecompleted gates need a
+  stack that mounts those plugins (m502, m502b): `mdl ci`, and so `mdl mutate --fast`,
+  installs none of them, skips their tests and reads those gates as held by nothing. Adding a
+  guard without a mutation is how untested ones get in. The first sweep found one that reddened nothing — the restore clamp above —
   and it turned out to be wrong code, not a missing test.
 - **Restore into an EXISTING course is a different path from restore into a new one**, and
   the review found both defects above on it: `TARGET_EXISTING_ADDING` with `overwrite_conf`

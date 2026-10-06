@@ -21,7 +21,8 @@ for a non-default state, each recording `usermodified`.
 - Setting a course to or from unlisted needs no capability of its own here: every route to it is
   already behind `moodle/course:visibility` on the form, or the update and restore capabilities.
 - The viewer is untrusted. A viewer may discover an unlisted course only through a relationship
-  with it (enrolled, application pending, staff, or able to enrol right now) and an unlisted
+  with it (enrolled, also from a later date; application pending; staff; able to enrol right
+  now; or due to be enrolled on completing another course) and an unlisted
   category only through a cohort at that category, a role there or above, or
   `moodle/category:viewhiddencategories`.
 - Anonymous visitors are untrusted and only ever meet `is_public()` / `are_public()` and
