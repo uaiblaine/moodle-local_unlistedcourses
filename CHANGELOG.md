@@ -9,6 +9,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Version `2026042002`. The scheduled-enrolment and course-deletion entries below were
 `2026042001`.
 
+### Added
+
+- **Three more relationships: waitlisted, suspended and expired.** `access::classify_enrolment()`
+  now tells an `enrol_apply` waiting-list row (status 2) that has not ended (`waitlisted`) from a
+  fresh application (`pending`), a suspended row that has not ended (`suspended`), and a row whose
+  end date has passed, whatever its status (`expired`), from no relationship at all. A row on a
+  disabled instance, and one that ends before it starts, are still `none`; an application or a
+  waiting-list row awaiting a decision is still judged by `enrol_apply`'s queue, whatever the
+  instance says. `get_enrolment_state()` ranks them enrolled, scheduled, pending, waitlisted,
+  suspended, expired, none, with the winning row's start and end dates (of two expired rows, the
+  later end), so a surface can say when an enrolment starts or ended. A waiting-list row whose end
+  date has passed is `expired`.
+- **`access::get_next_action($courseid)`: what the current user may do now to join a course**,
+  whatever their relationship with it: `open` with its routes (`self`, `apply`, `fee`, `paypal`,
+  `autoenrol`), `guest` (`free`, or behind a `key`), `conditional` (an `enrol_coursecompleted`
+  instance, for a viewer actively enrolled in its prerequisite), `blocked` with the most useful
+  reason (`window`, `full`, `cohort`, `own_row`, `off`), or `none`. Each method is asked its own
+  question, as `can_enrol()` did; public constants name every value. A visitor, the guest account
+  and the site course are offered nothing. With `get_enrolment_state()`, `get_next_actions()` and
+  `classify_enrolment()` it is the supported API other plugins read enrolment state through.
+- **`access::get_next_actions($courseids)`: the same answer for a page of courses in at most four
+  statements**, whatever the page holds, ported from the theme's listing classifier. It drops the
+  two checks SQL cannot read, the self enrolment capability and `enrol_autoenrol`'s rule, so it may
+  answer open where the per-course form answers blocked, never the reverse; it is never used to
+  decide whether a course may be named.
+
+### Changed
+
+- **The relationships that keep an unlisted course discoverable are an explicit list**: enrolled,
+  scheduled, pending and waitlisted. The rule used to be "anything but none", which would have
+  opened unlisted courses to every suspended or expired viewer the moment those types existed. No
+  listing changes: a waiting-list row was pending before, and suspended and expired rows were none.
+- `can_enrol()` is now "the next action is open, guest or conditional", with the per-method rules
+  unchanged. It does not work out why a method refuses, so a listing pays nothing for that.
+- The help of the course and category discoverability settings names the waiting list, and says
+  that a suspended or ended enrolment does not count.
+
 ### Fixed
 
 - **An application whose end date has passed is no longer pending.** A row of an `enrol_apply`
@@ -16,7 +53,7 @@ Version `2026042002`. The scheduled-enrolment and course-deletion entries below 
   date is unset or still ahead, which is `enrol_apply`'s own queue rule. An approved enrolment
   that the expiry sweep suspended after its end date read like a fresh application: it kept an
   unlisted course discoverable and the theme's course card said it was under review. It now
-  relates to nothing. A row on the waiting list is still pending.
+  keeps nothing (it is `expired`, see above). A row on the waiting list still keeps the course.
 - **An `enrol_apply` instance on which the viewer already holds a row is no longer a way in.**
   `enrol_apply` takes no second application on that instance, so a learner whose approved
   enrolment had ended kept an unlisted course discoverable through an application they could not
