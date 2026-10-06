@@ -6,12 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-Version `2026100502`, `MATURITY_STABLE`: the Moodle 5.3 branch (`MOODLE_503_STABLE`), numbered in
+Version `2026100503`, `MATURITY_STABLE`: the Moodle 5.3 branch (`MOODLE_503_STABLE`), numbered in
 the 5.3 namespace (`20261005XX`, the core version 5.3.0 shipped with). It is the 5.2 code with its
 own `version.php`, the single CI job against core `MOODLE_503_STABLE` and the README compatibility
 line. The asynchronous-deletion gap that kept it alpha is closed by the course-deletion change
-below, and a test that runs the real asynchronous path pins it. The enrolment fixes and the new
-routes below are `2026100502`; the rest was `2026100501`.
+below, and a test that runs the real asynchronous path pins it. The relationship, allow-list and
+next-action entries below are `2026100503`, the enrolment fixes and the new routes `2026100502`,
+and the rest was `2026100501`.
 
 ### Added
 
