@@ -660,7 +660,7 @@ final class access_test extends \advanced_testcase {
         $lapsed = $this->add_enrolment_row($applyid, ENROL_USER_SUSPENDED, $now - 10 * DAYSECS, $now - 5 * DAYSECS);
         $this->setUser($lapsed);
         access::reset_caches();
-        $this->assertSame(access::RELATIONSHIP_NONE, access::get_enrolment_state((int) $course->id)['type']);
+        $this->assertSame(access::RELATIONSHIP_EXPIRED, access::get_enrolment_state((int) $course->id)['type']);
         $this->assertFalse(
             access::is_course_discoverable((int) $course->id),
             'An enrolment suspended after its end date is not an application awaiting a decision.'
@@ -677,7 +677,7 @@ final class access_test extends \advanced_testcase {
         $deferred = $this->add_enrolment_row($applyid, 2, 0, 0);
         $this->setUser($deferred);
         access::reset_caches();
-        $this->assertSame(access::RELATIONSHIP_PENDING, access::get_enrolment_state((int) $course->id)['type']);
+        $this->assertSame(access::RELATIONSHIP_WAITLISTED, access::get_enrolment_state((int) $course->id)['type']);
         $this->assertTrue(access::is_course_discoverable((int) $course->id), 'Control: a waiting-list row keeps the course.');
     }
 
@@ -709,9 +709,9 @@ final class access_test extends \advanced_testcase {
         $this->setUser($holder);
         access::reset_caches();
         $this->assertSame(
-            access::RELATIONSHIP_NONE,
+            access::RELATIONSHIP_EXPIRED,
             access::get_enrolment_state((int) $course->id)['type'],
-            'Precondition: an enrolment whose end date has passed is no relationship.'
+            'Precondition: an enrolment whose end date has passed is expired, which keeps no unlisted course.'
         );
         $this->assertTrue(
             enrol_get_plugin('apply')->allow_apply($instance) === true,
@@ -781,9 +781,9 @@ final class access_test extends \advanced_testcase {
         $this->setUser($holder);
         access::reset_caches();
         $this->assertSame(
-            access::RELATIONSHIP_NONE,
+            access::RELATIONSHIP_EXPIRED,
             access::get_enrolment_state((int) $course->id)['type'],
-            'Precondition: an enrolment whose end date has passed is no relationship.'
+            'Precondition: an enrolment whose end date has passed is expired, which keeps no unlisted course.'
         );
         $this->assertFalse(
             access::is_course_discoverable((int) $course->id),
@@ -937,9 +937,9 @@ final class access_test extends \advanced_testcase {
         $this->setUser($holder);
         access::reset_caches();
         $this->assertSame(
-            access::RELATIONSHIP_NONE,
+            access::RELATIONSHIP_EXPIRED,
             access::get_enrolment_state((int) $course->id)['type'],
-            'Precondition: an enrolment whose end date has passed is no relationship.'
+            'Precondition: an enrolment whose end date has passed is expired, which keeps no unlisted course.'
         );
         $this->assertTrue(
             is_enrolled(\core\context\course::instance((int) $prerequisite->id), $holder, '', true),
@@ -999,6 +999,9 @@ final class access_test extends \advanced_testcase {
         $e = access::RELATIONSHIP_ENROLLED;
         $s = access::RELATIONSHIP_SCHEDULED;
         $p = access::RELATIONSHIP_PENDING;
+        $w = access::RELATIONSHIP_WAITLISTED;
+        $x = access::RELATIONSHIP_EXPIRED;
+        $u = access::RELATIONSHIP_SUSPENDED;
         $n = access::RELATIONSHIP_NONE;
         return [
             'open-ended and started' => [$on, 0, 0, 'manual', $enabled, $e, 0, 0],
@@ -1006,23 +1009,35 @@ final class access_test extends \advanced_testcase {
             'starting right now' => [$on, $now, 0, 'manual', $enabled, $e, $now, 0],
             'start date ahead' => [$on, $now + 50, 0, 'manual', $enabled, $s, $now + 50, 0],
             'start date ahead with an end' => [$on, $now + 50, $now + 90, 'self', $enabled, $s, $now + 50, $now + 90],
-            'expired' => [$on, $now - 90, $now - 10, 'manual', $enabled, $n, 0, 0],
-            'ends right now' => [$on, $now - 90, $now, 'manual', $enabled, $n, 0, 0],
+            'expired' => [$on, $now - 90, $now - 10, 'manual', $enabled, $x, $now - 90, $now - 10],
+            'ends right now' => [$on, $now - 90, $now, 'manual', $enabled, $x, $now - 90, $now],
             'end before start' => [$on, $now + 50, $now + 10, 'manual', $enabled, $n, 0, 0],
             'disabled instance, started' => [$on, 0, 0, 'manual', $disabled, $n, 0, 0],
             'disabled instance, start ahead' => [$on, $now + 50, 0, 'manual', $disabled, $n, 0, 0],
-            'suspended, start ahead' => [$off, $now + 50, 0, 'manual', $enabled, $n, 0, 0],
-            'suspended manual' => [$off, 0, 0, 'manual', $enabled, $n, 0, 0],
-            'suspended self' => [$off, 0, 0, 'self', $enabled, $n, 0, 0],
+            'disabled instance, ended' => [$on, $now - 90, $now - 10, 'manual', $disabled, $n, 0, 0],
+            'suspended, start ahead' => [$off, $now + 50, 0, 'manual', $enabled, $u, $now + 50, 0],
+            'suspended manual' => [$off, 0, 0, 'manual', $enabled, $u, 0, 0],
+            'suspended self' => [$off, 0, 0, 'self', $enabled, $u, 0, 0],
+            'suspended with an end date ahead' => [$off, $now - 90, $now + 10, 'manual', $enabled, $u, $now - 90, $now + 10],
+            'suspended and ended' => [$off, $now - 90, $now - 10, 'manual', $enabled, $x, $now - 90, $now - 10],
+            'suspended, end before start' => [$off, $now + 50, $now + 10, 'manual', $enabled, $n, 0, 0],
+            'suspended on a disabled instance' => [$off, 0, 0, 'manual', $disabled, $n, 0, 0],
+            'status 2 of another plugin' => [$wait, 0, 0, 'manual', $enabled, $u, 0, 0],
             'waiting application' => [$off, 0, 0, 'apply', $enabled, $p, 0, 0],
             'approved application, started' => [$on, 0, 0, 'apply', $enabled, $e, 0, 0],
+            'approved application, ended' => [$on, $now - 90, $now - 10, 'apply', $enabled, $x, $now - 90, $now - 10],
             'application with an end date ahead' => [$off, $now - 90, $now + 10, 'apply', $enabled, $p, $now - 90, $now + 10],
-            'application whose end date has passed' => [$off, $now - 90, $now - 10, 'apply', $enabled, $n, 0, 0],
-            'application ending right now' => [$off, 0, $now, 'apply', $enabled, $n, 0, 0],
+            'application whose end date has passed' => [$off, $now - 90, $now - 10, 'apply', $enabled, $x, $now - 90, $now - 10],
+            'application ending right now' => [$off, 0, $now, 'apply', $enabled, $x, 0, $now],
             'application, end before start' => [$off, $now + 50, $now + 10, 'apply', $enabled, $p, $now + 50, $now + 10],
             'application on a disabled instance' => [$off, 0, 0, 'apply', $disabled, $p, 0, 0],
-            'waiting list' => [$wait, 0, 0, 'apply', $enabled, $p, 0, 0],
-            'waiting list whose end date has passed' => [$wait, 0, $now - 10, 'apply', $enabled, $n, 0, 0],
+            'lapsed application on a disabled instance' => [$off, 0, $now - 10, 'apply', $disabled, $n, 0, 0],
+            'waiting list' => [$wait, 0, 0, 'apply', $enabled, $w, 0, 0],
+            'waiting list with an end date ahead' => [$wait, $now - 90, $now + 10, 'apply', $enabled, $w, $now - 90, $now + 10],
+            'waiting list on a disabled instance' => [$wait, 0, 0, 'apply', $disabled, $w, 0, 0],
+            'waiting list whose end date has passed' => [$wait, 0, $now - 10, 'apply', $enabled, $x, 0, $now - 10],
+            'waiting list ending right now' => [$wait, 0, $now, 'apply', $enabled, $x, 0, $now],
+            'lapsed waiting list on a disabled instance' => [$wait, 0, $now - 10, 'apply', $disabled, $n, 0, 0],
         ];
     }
 
@@ -1110,7 +1125,7 @@ final class access_test extends \advanced_testcase {
         $this->setUser($suspended);
         access::reset_caches();
         $this->assertFalse(access::is_course_discoverable((int) $course->id), 'A suspended enrolment does not count.');
-        $this->assertSame(access::RELATIONSHIP_NONE, access::get_enrolment_state((int) $course->id)['type']);
+        $this->assertSame(access::RELATIONSHIP_SUSPENDED, access::get_enrolment_state((int) $course->id)['type']);
 
         // Control: an enrolment that ended before it was ever active.
         $expired = $generator->create_user();

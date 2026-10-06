@@ -1,2 +1,2 @@
 # Keep a course completed instance a route for a viewer who already holds a row on it.
-s/(is_enrolled\(\$prerequisite, \$USER, '', true\)\n)\s+&& !self::holds_enrolment\(\$instance\)\n/$1/;
+s/        if \(\$holdsrow\) \{\n            return self::outcome\(\$instance, self::NEXT_BLOCKED, self::BLOCKED_OWN_ROW\);\n        \}\n(        if \(!self::inside_window\(\$instance, \$now\)\) \{\n            return self::outcome\(\$instance, self::NEXT_BLOCKED, self::BLOCKED_WINDOW\);\n        \}\n        \$outcome = self::outcome\(\$instance, self::NEXT_CONDITIONAL\);)/$1/;
