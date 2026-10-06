@@ -46,22 +46,45 @@ writes **only** true: the caller vouches for a relationship it read, and is not
 authoritative about the absence of one, because being staff of a course is a relationship
 too. It is keyed by the viewer and dropped by `reset_caches()`.
 
+Two more answers about the current user and a course, for the theme and blocks that print them:
+
+- `classify_enrolment(\stdClass $row, int $now)` and `get_enrolment_state(int $courseid)`: the
+  relationship the user's enrolment rows give them, with the row's dates - `enrolled`,
+  `scheduled` (an active row whose start date is ahead), `pending` (an `enrol_apply` application
+  awaiting a decision), `waitlisted` (on that plugin's waiting list), `suspended`, `expired` (an end
+  date that has passed) or `none` (no row, a row on a disabled instance, or one that ends before it
+  starts). When several rows exist the best wins, in that order.
+- `get_next_action(int $courseid)`: what they may do now to join, whatever the relationship -
+  `open` with its routes (`self`, `apply`, `fee`, `paypal`, `autoenrol`), `guest` (`free`, or
+  behind a `key`), `conditional` (an `enrol_coursecompleted` instance, for a viewer enrolled in its
+  prerequisite), `blocked` with the most useful reason (`window`, `full`, `cohort`, `own_row`,
+  `off`), or `none`. Every value is a public constant of `access`. It asks each method its own
+  question, with statements per instance. `get_next_actions(array $courseids)` answers a page of
+  courses in at most four statements, whatever the page holds: it drops the two checks SQL cannot
+  read (the self enrolment capability and `enrol_autoenrol`'s rule), so it may answer open where
+  the per-course form answers blocked, never the reverse, and it never decides discoverability.
+
 Somebody may discover an unlisted course when any of these holds:
 
 - they are actively enrolled, or enrolled on an enabled instance from a start date still ahead;
-- they have an application awaiting a decision - an `enrol_apply` row that is not active and
-  whose end date is unset or still ahead, which is `enrol_apply`'s own queue rule (without this
-  term, applying would make the course vanish the moment you applied);
-- they could enrol right now, each method asked what its own enrolment page asks:
+- they have an application awaiting a decision or on its waiting list - an `enrol_apply` row that
+  is not active and whose end date is unset or still ahead, which is `enrol_apply`'s own queue
+  rule (without this term, applying would make the course vanish the moment you applied);
+- they could enrol right now (their next action is open or guest), each method asked what its own
+  enrolment page asks:
   `enrol_self::can_self_enrol()`; for the fleet's `enrol_apply` fork, `allow_apply()` plus the
   applicant cap that lives outside it, on an instance where they hold no row yet; for
   `enrol_fee` and `enrol_paypal`, the enrolment window open, a price, and no row of theirs on the
   instance; any enabled guest instance, with or without a key; and `enrol_autoenrol`'s own
   `enrol_allowed()`;
-- they will be enrolled by `enrol_coursecompleted` once they complete another course: an
-  instance inside its enrolment window on which they hold no row, for a viewer actively enrolled in
-  the prerequisite course the instance names;
+- they will be enrolled by `enrol_coursecompleted` once they complete another course (their next
+  action is conditional): an instance inside its enrolment window on which they hold no row, for a
+  viewer actively enrolled in the prerequisite course the instance names;
 - they are staff - `moodle/course:view` or `moodle/course:viewhiddencourses` on the course.
+
+The relationships in that list are an explicit allow-list - enrolled, scheduled, pending,
+waitlisted. A suspended or expired enrolment keeps nothing by itself, though the course stays
+discoverable to that user through any route the next action still offers them.
 
 The gate itself is native: `enrol.customint5`, the "only cohort members" field both enrol
 plugins already carry.
