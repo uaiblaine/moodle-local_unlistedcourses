@@ -6,8 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-Version `2026042002`. The scheduled-enrolment and course-deletion entries below were
-`2026042001`.
+Version `2026042003`. The relationship, allow-list and next-action entries below are
+`2026042003`; the queue rule and the new routes were `2026042002`, and the scheduled-enrolment and
+course-deletion entries `2026042001`.
 
 ### Added
 
