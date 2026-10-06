@@ -29,7 +29,8 @@ namespace local_unlistedcourses;
  *
  * A course in the unlisted state ({@see discoverability}) is discoverable
  * only by someone who is actively enrolled, has an enrolment that starts later,
- * has an application pending, is staff of the course, or could enrol right now. Everyone else must not learn
+ * has an application pending, is staff of the course, could enrol right now, or
+ * will be enrolled on completing another course. Everyone else must not learn
  * that it exists, so the answer feeds course listings, the enrolment page and
  * anything else that would otherwise print its name. The other two states
  * (listed, public) are discoverable by anybody. Whether a public course may be
@@ -61,7 +62,7 @@ class access {
     /** Enrolment relationship: an active enrolment on an enabled instance whose start date is still ahead. */
     public const RELATIONSHIP_SCHEDULED = 'scheduled';
 
-    /** Enrolment relationship: an enrol_apply row that is not active, an application awaiting a decision. */
+    /** Enrolment relationship: an enrol_apply row that is not active and has not ended, an application awaiting a decision. */
     public const RELATIONSHIP_PENDING = 'pending';
 
     /** Enrolment relationship: nothing that ties the user to the course. */
@@ -468,11 +469,16 @@ class access {
      *   (a start date at or before now, no end date or one still ahead).
      * - scheduled: the same row with a start date still ahead. Core does not call this user
      *   enrolled yet, but an administrator decided they take part, so the course is theirs.
-     * - pending: a row of an enrol_apply instance that is not active, an application awaiting
-     *   a decision. Rows of other plugins that are not active are decisions already taken
-     *   (a suspended manual enrolment) and relate to nothing.
-     * - none: everything else, including an expired row, a row on a disabled instance and a
-     *   row whose end date precedes its start date, which core skips as well.
+     * - pending: a row of an enrol_apply instance that is not active and whose end date is
+     *   unset or still ahead, an application awaiting a decision. That is enrol_apply's own
+     *   queue rule, the authority on what awaits a decision: it reads neither the start date nor
+     *   the instance status, so a waiting-list row (status 2) is pending too, and an approved
+     *   enrolment re-suspended by the expiry sweep after its end date is not. Rows of other
+     *   plugins that are not active are decisions already taken (a suspended manual enrolment)
+     *   and relate to nothing.
+     * - none: everything else, including an expired row, a row on a disabled instance, an
+     *   application whose end date has passed, and an active row whose end date precedes its
+     *   start date, which core skips as well.
      *
      * @param \stdClass $row A user_enrolments row joined with its instance: status, timestart,
      *        timeend, enrol (the plugin name) and instancestatus.
@@ -485,22 +491,22 @@ class access {
         $timeend = (int) $row->timeend;
         $none = ['type' => self::RELATIONSHIP_NONE, 'startsat' => 0, 'endsat' => 0];
 
-        if ($timeend !== 0 && $timeend < $timestart) {
+        if ((int) $row->status !== ENROL_USER_ACTIVE) {
+            // Must agree with \enrol_apply\local\queue::is_awaiting_decision(), which is the same test.
+            if ($row->enrol === 'apply' && ($timeend === 0 || $timeend > $now)) {
+                return ['type' => self::RELATIONSHIP_PENDING, 'startsat' => $timestart, 'endsat' => $timeend];
+            }
             return $none;
         }
 
-        if ((int) $row->status === ENROL_USER_ACTIVE) {
-            if ((int) $row->instancestatus !== ENROL_INSTANCE_ENABLED || ($timeend !== 0 && $timeend <= $now)) {
-                return $none;
-            }
-            $type = $timestart > $now ? self::RELATIONSHIP_SCHEDULED : self::RELATIONSHIP_ENROLLED;
-            return ['type' => $type, 'startsat' => $timestart, 'endsat' => $timeend];
+        if ($timeend !== 0 && $timeend < $timestart) {
+            return $none;
         }
-
-        if ($row->enrol === 'apply') {
-            return ['type' => self::RELATIONSHIP_PENDING, 'startsat' => $timestart, 'endsat' => $timeend];
+        if ((int) $row->instancestatus !== ENROL_INSTANCE_ENABLED || ($timeend !== 0 && $timeend <= $now)) {
+            return $none;
         }
-        return $none;
+        $type = $timestart > $now ? self::RELATIONSHIP_SCHEDULED : self::RELATIONSHIP_ENROLLED;
+        return ['type' => $type, 'startsat' => $timestart, 'endsat' => $timeend];
     }
 
     /**
@@ -556,34 +562,53 @@ class access {
     }
 
     /**
-     * Whether any enabled enrolment instance would accept the current user right now.
+     * Whether any enabled enrolment instance offers the current user a way into the course.
      *
      * Dispatches per plugin rather than calling one shared method, because
      * there is no shared method to call: enrol_plugin::can_self_enrol() is
      * `return false` in the base class and only enrol_self overrides it in
-     * core, so asking every plugin through it would report "no" for
-     * enrol_apply and hide the course from the people it is open to.
+     * core, so asking every plugin through it would report "no" for every
+     * other method and hide the course from the people it is open to.
      *
-     * The enrol_apply branch mirrors
-     * {@see \theme_boost_union_fundaseg\local\hotsite\resolver}; keep the two in
-     * step. allow_apply() is guarded with is_callable() because an enrol_apply
-     * build without it may be installed, and the applicant limit is checked
-     * separately because allow_apply() does not check it.
+     * Each branch asks what that plugin's own enrolment page asks:
      *
-     * Both branches also enforce the enrolment window and the places limit, so
-     * an unlisted course disappears from the listing while its enrolment window
-     * is shut or once it is full. That is deliberate - for enrol_self it is the
-     * answer core's own enrolment icons give - but it does make the listing
-     * time-dependent.
+     * - self: can_self_enrol(), strictly true.
+     * - apply: allow_apply() and the places limit, on an instance where the viewer holds no row.
+     *   The branch mirrors {@see \theme_boost_union_fundaseg\local\hotsite\resolver}; keep the
+     *   two in step.
+     * - fee and paypal: the conditions their enrol_page_hook() tests before it offers the
+     *   payment button - no row of the viewer's on the instance, the enrolment window open, and
+     *   a cost - which the same theme resolver mirrors for fee.
+     * - guest: any enabled instance. A key, when set, is asked for on entry, but the course is
+     *   still one the viewer may enter.
+     * - autoenrol: the plugin's own enrol_allowed(), the check behind its enrolment page and its
+     *   enrol-me link: its rule, its window, its limit and the viewer's existing enrolments.
+     * - coursecompleted: an instance inside its enrolment window on which the viewer holds no
+     *   row, for a viewer actively enrolled in the course it names. It enrols nobody now, but that
+     *   viewer will be enrolled on completing the prerequisite, which is reason enough to let them
+     *   find this one; anyone else has no tie to the prerequisite, and naming the course to them
+     *   would defeat the unlisting.
+     *
+     * The methods outside core are optional here. allow_apply() and enrol_allowed() are called
+     * through the plugin object behind is_callable(), because a build without them may be
+     * installed and naming a class of theirs would need the autoloader to find it;
+     * coursecompleted is read from its instance alone. The applicant limit is checked separately
+     * because allow_apply() does not check it.
+     *
+     * Every branch but guest also enforces an enrolment window, and some a places limit, so an
+     * unlisted course disappears from the listing while its window is shut or once it is full.
+     * That is deliberate - for enrol_self it is the answer core's own enrolment icons give - but
+     * it does make the listing time-dependent.
      *
      * @param int $courseid The course id.
-     * @return bool True when at least one instance would accept this user.
+     * @return bool True when at least one instance offers this user a way in.
      */
     private static function can_enrol(int $courseid): bool {
-        global $CFG;
+        global $CFG, $USER;
 
         require_once($CFG->dirroot . '/enrol/self/lib.php');
 
+        $now = time();
         foreach (enrol_get_instances($courseid, true) as $instance) {
             $plugin = enrol_get_plugin($instance->enrol);
             if (!$plugin) {
@@ -601,6 +626,10 @@ class access {
             }
 
             if ($instance->enrol === 'apply' && is_callable([$plugin, 'allow_apply'])) {
+                // An application already made, decided or not, is no route: allow_apply() does not look for one.
+                if (self::holds_enrolment($instance)) {
+                    continue;
+                }
                 if ($plugin->allow_apply($instance) !== true) {
                     continue;
                 }
@@ -609,9 +638,93 @@ class access {
                 }
                 return true;
             }
+
+            if ($instance->enrol === 'fee' || $instance->enrol === 'paypal') {
+                if (
+                    !self::holds_enrolment($instance)
+                    && self::inside_window($instance, $now)
+                    && abs(self::payment_cost($instance, $plugin)) >= 0.01
+                ) {
+                    return true;
+                }
+                continue;
+            }
+
+            if ($instance->enrol === 'guest') {
+                return true;
+            }
+
+            if ($instance->enrol === 'autoenrol' && is_callable([$plugin, 'enrol_allowed'])) {
+                if ($plugin->enrol_allowed($instance, $USER) === true) {
+                    return true;
+                }
+                continue;
+            }
+
+            if ($instance->enrol === 'coursecompleted') {
+                // The prerequisite is the course the instance names (customint1); only a viewer
+                // working towards it is promised this one.
+                $prerequisite = \core\context\course::instance((int) $instance->customint1, IGNORE_MISSING);
+                if (
+                    $prerequisite
+                    && is_enrolled($prerequisite, $USER, '', true)
+                    && !self::holds_enrolment($instance)
+                    && self::inside_window($instance, $now)
+                ) {
+                    return true;
+                }
+                continue;
+            }
         }
 
         return false;
+    }
+
+    /**
+     * Whether the current user holds a user_enrolments row on this instance, in any status.
+     *
+     * @param \stdClass $instance Enrol instance.
+     * @return bool True when a row exists.
+     */
+    private static function holds_enrolment(\stdClass $instance): bool {
+        global $DB, $USER;
+
+        return $DB->record_exists('user_enrolments', ['userid' => $USER->id, 'enrolid' => $instance->id]);
+    }
+
+    /**
+     * Whether now is inside an instance's enrolment window, a bound of 0 meaning none.
+     *
+     * The window as enrol_fee, enrol_paypal and enrol_coursecompleted test it: the start date
+     * itself and the end date itself are both inside.
+     *
+     * @param \stdClass $instance Enrol instance carrying enrolstartdate and enrolenddate.
+     * @param int $now The time to judge against.
+     * @return bool True when the window is open.
+     */
+    private static function inside_window(\stdClass $instance, int $now): bool {
+        $start = (int) $instance->enrolstartdate;
+        $end = (int) $instance->enrolenddate;
+
+        return ($start === 0 || $start <= $now) && ($end === 0 || $end >= $now);
+    }
+
+    /**
+     * The price of a fee or paypal instance, falling back to the plugin's default.
+     *
+     * The same rule as both plugins' enrol_page_hook(): an instance cost of zero or less means
+     * "use the site default", and a result under 0.01 means no price, on which the hook offers
+     * no payment button.
+     *
+     * @param \stdClass $instance Enrol instance of enrol_fee or enrol_paypal.
+     * @param \enrol_plugin $plugin The instance's plugin.
+     * @return float The cost.
+     */
+    private static function payment_cost(\stdClass $instance, \enrol_plugin $plugin): float {
+        if ((float) $instance->cost <= 0) {
+            return (float) $plugin->get_config('cost');
+        }
+        return (float) $instance->cost;
     }
 
     /**
