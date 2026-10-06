@@ -166,6 +166,30 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   pending application is not an enrolment, staff must never lose a course,
   `is_enrolled()` is unconditionally true on SITEID — are documented in that class's
   docblocks and held by `tests/access_test.php`.
+- **The relationships that keep an unlisted course are an allow-list**
+  (`access::DISCOVERABLE_RELATIONSHIPS`: enrolled, scheduled, pending, waitlisted), never
+  "anything but none". A relationship type added later stays hidden until it is put there on
+  purpose; suspended and expired are deliberately out. `next_action_test` runs every row shape
+  through both halves of the rule (the unlisted predicate and the category-term escape).
+- **The next action has two implementations, and only one of them may decide
+  discoverability.** `get_next_action()` asks each enrol plugin; `get_next_actions()` reads
+  the same rules from at most four bulk statements and drops what SQL cannot read (the self
+  enrolment capability, autoenrol's rule), so it errs towards open by design. Wiring the batch
+  into `eligible()` or `filter_courses()` would name unlisted courses to people the plugins
+  refuse. Its statement-count and parity tests are in `next_action_test`.
+- **`can_enrol()` evaluates without reasons** (`evaluate_next_action($courseid, false)`): a
+  listing probes unrelated unlisted courses, every one refused by something, and must not pay
+  statements to explain refusals nobody reads. `test_the_listing_does_not_pay_for_the_reason_of_a_refusal`
+  holds it.
+- **The lapsed waiting-list branch of `classify_enrolment()` returns what the end-date test
+  after it would** (expired, the owner's decision of 2026-10-06). It is kept so the waiting
+  list's rule reads in one place; its gate flips it to waitlisted rather than deleting it,
+  because deleting it reddens nothing.
+- **`get_enrolment_state()`, `get_next_action()`, `get_next_actions()` and
+  `classify_enrolment()` are the supported API** (the class docblock says so): the theme, Compass
+  (a hard dependency) and `local_dimensions` (behind its optional provider switch) read enrolment
+  state through them. Their shapes and constant values are a contract; change them only with
+  those consumers.
 
 ## Testing notes
 
@@ -182,8 +206,8 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   may not publish is refused.
 - **`enrol_apply` is absent from a fresh test site's `enrol_plugins_enabled`** —
   `add_apply_enrol()` in `access_test` enables it first.
-- **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds seventy-three
-  guards, and each must redden a test. The apply, autoenrol and coursecompleted gates need a
+- **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds a hundred and
+  five guards, and each must redden a test. The apply, autoenrol and coursecompleted gates need a
   stack that mounts those plugins: m503 and m503b mount autoenrol and coursecompleted, and no
   5.3 stack mounts enrol_apply, whose supported range ends at 5.2. `mdl ci`, and so
   `mdl mutate --fast`, installs none of them, skips their tests and reads those gates as held
