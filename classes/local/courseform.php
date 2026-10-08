@@ -82,7 +82,7 @@ class courseform {
         }
 
         $current = $creating
-            ? discoverability::STATE_DEFAULT
+            ? discoverability::get_creation_default()
             : discoverability::get_state((int) $course->id);
         $canpublish = self::will_hold(discoverability::CAPABILITY_PUBLISH, $context, $creating);
 
@@ -128,19 +128,30 @@ class courseform {
     }
 
     /**
-     * Persist the submitted state, if the submission carried one.
+     * Persist the submitted state, or give a new course the site's default.
      *
-     * A submission without the element - a web service call, a CSV upload, a
-     * form rendered without the control - leaves the state untouched. The site
-     * course is never touched.
+     * The element, when the submission carries it, always wins. Without it - a
+     * web service call, a CSV upload, a course request approval, a form
+     * rendered without the control - an existing course keeps its state and a
+     * course being created receives {@see discoverability::get_creation_default()}.
+     * Both cases arrive here because create_course() dispatches the same hook as
+     * update_course(), after the course row exists, with $isnewcourse telling
+     * the two apart. The site course is never touched.
      *
      * @param \stdClass $data The submitted course data.
+     * @param bool $isnewcourse Whether the course was just created.
      * @return void
      */
-    public static function save(\stdClass $data): void {
-        $state = $data->{self::ELEMENT} ?? null;
-        if ($state === null || empty($data->id) || $data->id == SITEID) {
+    public static function save(\stdClass $data, bool $isnewcourse = false): void {
+        if (empty($data->id) || $data->id == SITEID) {
             return;
+        }
+        $state = $data->{self::ELEMENT} ?? null;
+        if ($state === null) {
+            if (!$isnewcourse) {
+                return;
+            }
+            $state = discoverability::get_creation_default();
         }
         discoverability::set_state((int) $data->id, (int) $state);
     }

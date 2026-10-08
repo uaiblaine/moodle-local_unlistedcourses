@@ -42,11 +42,21 @@ use local_unlistedcourses\discoverability;
  * value given in the CSV over the template's, and no CSV column can do the same
  * for this state.
  *
+ * A backup taken on a site without this plugin carries no element at all. When
+ * such a backup is restored as a new course, the course receives the site's
+ * restore default ({@see discoverability::get_restore_default()}) from
+ * after_execute_course(), which core calls on this object whether or not the
+ * element was in course.xml. A restore into an existing course never receives
+ * it: that course keeps the state it has.
+ *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 class restore_local_unlistedcourses_plugin extends restore_local_plugin {
+    /** @var bool Whether course.xml carried the state element, whatever its value. */
+    protected bool $stateinbackup = false;
+
     /**
      * Declare the state path inside course.xml.
      *
@@ -65,6 +75,8 @@ class restore_local_unlistedcourses_plugin extends restore_local_plugin {
      * @return void
      */
     public function process_local_unlistedcourses_state($data) {
+        // Any element counts as a value, an unknown one included: the backup's site had the plugin.
+        $this->stateinbackup = true;
         $data = (object) $data;
         $state = (int) $data->state;
         if (!in_array($state, discoverability::states(), true)) {
@@ -81,5 +93,27 @@ class restore_local_unlistedcourses_plugin extends restore_local_plugin {
             $key = ($state === discoverability::STATE_PUBLIC) ? 'restore_publicclamped' : 'restore_statenotapplied';
             $this->task->log(get_string($key, 'local_unlistedcourses'), backup::LOG_WARNING);
         }
+    }
+
+    /**
+     * Give a new course restored from a backup without the element the site's restore default.
+     *
+     * Core launches this after parsing course.xml for every processing object
+     * registered on the course element (restore_structure_step::execute() calls
+     * launch_after_execute_methods()), so it runs when the element was absent
+     * too, which is the case it exists for. The course step runs only for a
+     * new course, an overwrite of configuration or a template restore
+     * ({@see restore_course_task::build()}); only the first gets the default.
+     *
+     * @return void
+     */
+    protected function after_execute_course() {
+        if ($this->stateinbackup || $this->task->get_target() != backup::TARGET_NEW_COURSE) {
+            return;
+        }
+        $courseid = (int) $this->task->get_courseid();
+        $userid = (int) $this->task->get_userid();
+        // The default is never public, so the publish gate in set_state() is never reached from here.
+        discoverability::set_state($courseid, discoverability::get_restore_default(), $userid);
     }
 }

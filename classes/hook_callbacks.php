@@ -49,16 +49,17 @@ class hook_callbacks {
     }
 
     /**
-     * Persist the submitted state.
+     * Persist the submitted state, or the site's default on a new course.
      *
      * Dispatched from create_course() and update_course(), so this runs for
      * the web service and tool_uploadcourse as well as for the form - which
-     * is why the capability check is in set_state() and not here.
+     * is why the capability check is in set_state() and not here. The hook's
+     * isnewcourse flag is what keeps the default off an update.
      *
      * @param \core_course\hook\after_form_submission $hook The hook.
      * @return void
      */
     public static function after_form_submission(\core_course\hook\after_form_submission $hook): void {
-        courseform::save($hook->get_data());
+        courseform::save($hook->get_data(), $hook->isnewcourse);
     }
 }

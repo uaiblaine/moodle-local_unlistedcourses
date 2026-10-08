@@ -351,4 +351,146 @@ final class courseform_test extends \advanced_testcase {
         update_course((object) ['id' => $course->id, 'fullname' => 'Wired, renamed']);
         $this->assertTrue(discoverability::is_public((int) $course->id));
     }
+
+    /**
+     * Set the default for new courses.
+     *
+     * @param int $state One of the state constants.
+     * @return void
+     */
+    private function set_creation_default(int $state): void {
+        set_config(discoverability::SETTING_DEFAULT, $state, 'local_unlistedcourses');
+    }
+
+    /**
+     * Create a course the way a web service or a CSV upload does: without the element.
+     *
+     * @param int $categoryid The category id.
+     * @param string $shortname The short name.
+     * @return int The new course id.
+     */
+    private function create_without_element(int $categoryid, string $shortname): int {
+        $course = create_course((object) [
+            'fullname' => 'Course ' . $shortname,
+            'shortname' => $shortname,
+            'category' => $categoryid,
+        ]);
+        return (int) $course->id;
+    }
+
+    /**
+     * A course created without the element receives the site's default, whichever of the two it is.
+     *
+     * @return void
+     */
+    public function test_a_course_created_without_the_element_gets_the_site_default(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $this->setAdminUser();
+
+        // Never set: listed, as before the setting existed.
+        $unset = $this->create_without_element((int) $category->id, 'unset');
+        $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_state($unset));
+        $this->assertFalse($DB->record_exists(discoverability::TABLE, ['courseid' => $unset]));
+
+        $this->set_creation_default(discoverability::STATE_UNLISTED);
+        $unlisted = $this->create_without_element((int) $category->id, 'unlisted');
+        $this->assertTrue(discoverability::is_unlisted($unlisted), 'The default must reach a course created without the element.');
+
+        $this->set_creation_default(discoverability::STATE_DEFAULT);
+        $listed = $this->create_without_element((int) $category->id, 'listed');
+        $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_state($listed));
+
+        // A public value written by hand is not a choice: it reads as listed, never as public.
+        $this->set_creation_default(discoverability::STATE_PUBLIC);
+        $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_creation_default());
+        $handwritten = $this->create_without_element((int) $category->id, 'handwritten');
+        $this->assertFalse(discoverability::is_public($handwritten));
+        $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_state($handwritten));
+
+        // Control: the earlier course keeps its state; the default touches only the course being created.
+        $this->assertTrue(discoverability::is_unlisted($unlisted));
+    }
+
+    /**
+     * The course web service creates without the element, so its course receives the default.
+     *
+     * @return void
+     */
+    public function test_the_course_web_service_applies_the_default(): void {
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $this->setAdminUser();
+        $this->set_creation_default(discoverability::STATE_UNLISTED);
+        $_POST['sesskey'] = sesskey();
+
+        $response = \core_external\external_api::call_external_function('core_course_create_courses', [
+            'courses' => [['fullname' => 'From a web service', 'shortname' => 'ws', 'categoryid' => (int) $category->id]],
+        ]);
+
+        $this->assertFalse($response['error'], json_encode($response));
+        $this->assertTrue(discoverability::is_unlisted((int) $response['data'][0]['id']));
+    }
+
+    /**
+     * The form starts at the default for a new course, and an explicit value always beats the default.
+     *
+     * @return void
+     */
+    public function test_the_form_value_wins_over_the_default(): void {
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $context = \core\context\coursecat::instance($category->id);
+        $this->setUser($this->create_manager((int) $category->id));
+        $this->set_creation_default(discoverability::STATE_UNLISTED);
+
+        $mform = $this->make_form();
+        courseform::extend((object) ['category' => $category->id], $context, $mform);
+        $this->assertEquals(
+            [discoverability::STATE_UNLISTED],
+            $mform->getElement(courseform::ELEMENT)->getSelected(),
+            'A new course starts at the default.'
+        );
+
+        // Explicitly listed on the form, against an unlisted default.
+        $course = create_course((object) [
+            'fullname' => 'Explicitly listed',
+            'shortname' => 'explicit',
+            'category' => $category->id,
+            courseform::ELEMENT => discoverability::STATE_DEFAULT,
+        ]);
+        $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_state((int) $course->id));
+
+        // Control: an existing course's form starts at its own state, not at the default.
+        $mform = $this->make_form();
+        courseform::extend($course, \core\context\course::instance($course->id), $mform);
+        $this->assertEquals([discoverability::STATE_DEFAULT], $mform->getElement(courseform::ELEMENT)->getSelected());
+    }
+
+    /**
+     * Updating a course without the element never applies the default.
+     *
+     * @return void
+     */
+    public function test_an_update_without_the_element_never_applies_the_default(): void {
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $this->setAdminUser();
+        $listed = $this->create_without_element((int) $category->id, 'listed');
+        $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_state($listed), 'Precondition: listed.');
+
+        $this->set_creation_default(discoverability::STATE_UNLISTED);
+        update_course((object) ['id' => $listed, 'fullname' => 'Renamed']);
+        $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_state($listed), 'An update must keep the state.');
+
+        courseform::save((object) ['id' => $listed, 'fullname' => 'Renamed again']);
+        $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_state($listed));
+
+        // Control: the same default does reach a course being created, through save() and through create_course().
+        courseform::save((object) ['id' => $listed], true);
+        $this->assertTrue(discoverability::is_unlisted($listed));
+        $this->assertTrue(discoverability::is_unlisted($this->create_without_element((int) $category->id, 'fresh')));
+    }
 }

@@ -147,6 +147,25 @@ backup carries the state, for every course; a restore writes it through the same
 logged, and the target keeps the state it had. Nobody consents to publishing a course by
 restoring a backup.
 
+### Defaults for new courses
+
+Two settings, under *Site administration > Plugins > Local plugins > Course discoverability*,
+decide what a course gets when nobody chose its state. Each offers listed or unlisted, and both
+default to listed, which is what the plugin did before they existed. Public is never a choice:
+publishing needs `local/unlistedcourses:publish` of whoever creates or restores the course, and
+a web service call, a CSV upload or a restore run by somebody without it would be refused.
+
+- **Default discoverability for new courses** (`defaultstate`). The course form's select starts
+  at it for a new course, and a course created without the select - by the course web service,
+  `tool_uploadcourse`, an approved course request, `create_course()` from code, or a form shown
+  to somebody who may not set course visibility - receives it. A value chosen on the form always
+  wins, and updating a course never applies it.
+- **Discoverability of a restored course whose backup has none** (`restoredefaultstate`). A
+  backup taken on a site without this plugin carries no state; restored as a new course, it gets
+  this one. A backup that carries a state keeps it (still behind the publish check), and a
+  restore into an existing course leaves that course's state alone. A course created by a CSV
+  upload from a template backup is created first, so it gets the default for new courses.
+
 A category's state is written from one page, `local/unlistedcourses/category.php`, reached
 from the category's settings menu (the "More" menu of a category page): core dispatches no
 hook from the category form and has no custom field handler for categories. The page shows
