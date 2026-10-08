@@ -63,6 +63,10 @@ Two more answers about the current user and a course, for the theme and blocks t
   courses in at most four statements, whatever the page holds: it drops the two checks SQL cannot
   read (the self enrolment capability and `enrol_autoenrol`'s rule), so it may answer open where
   the per-course form answers blocked, never the reverse, and it never decides discoverability.
+  Both answer `opens` when the course is `blocked` only because a route's enrolment window has not
+  opened yet: the earliest such start date, a timestamp, or null. A surface that says when
+  enrolment opens prints this date and never works one out; the batch may leave it null where
+  the per-course form dates it, never the reverse.
 
 Somebody may discover an unlisted course when any of these holds:
 

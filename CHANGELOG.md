@@ -6,16 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-Version `2026100503`, `MATURITY_STABLE`: the Moodle 5.3 branch (`MOODLE_503_STABLE`), numbered in
+Version `2026100505`, `MATURITY_STABLE`: the Moodle 5.3 branch (`MOODLE_503_STABLE`), numbered in
 the 5.3 namespace (`20261005XX`, the core version 5.3.0 shipped with). It is the 5.2 code with its
 own `version.php`, the single CI job against core `MOODLE_503_STABLE` and the README compatibility
 line. The asynchronous-deletion gap that kept it alpha is closed by the course-deletion change
-below, and a test that runs the real asynchronous path pins it. The relationship, allow-list and
-next-action entries below are `2026100503`, the enrolment fixes and the new routes `2026100502`,
-and the rest was `2026100501`.
+below, and a test that runs the real asynchronous path pins it. The opening-date entry below is
+`2026100505`; the relationship, allow-list and next-action entries are `2026100503`, the enrolment
+fixes and the new routes `2026100502`, and the rest was `2026100501`.
 
 ### Added
 
+- **The next action dates the opening of a window: `opens`.** `get_next_action()` and
+  `get_next_actions()` gain a key `opens`, a timestamp or null: when the summary is `blocked`, the
+  earliest enrolment start date still ahead among the instances whose only refusal is that their
+  window has not opened yet - each asked again, by the same rule, as if its window were open, and
+  counted when it then offers a route (`self`, `apply`, `fee`, `paypal`, `autoenrol`). A closed
+  window, a window that ends before it starts, an instance that would still refuse (full, cohort,
+  own row, new enrolments off, the self enrolment capability) and `enrol_coursecompleted` give no
+  date. Every other key keeps its meaning. The batch stays within its statements: the first one
+  now carries the course contexts and the autoenrol rule, so it checks the self enrolment
+  capability before it dates an instance and never dates one behind an autoenrol rule; it may give
+  no date where the per-course form gives one, never the reverse. Learning-plan cards print it
+  ("Enrolment opens on ..."); consumers read it here and never work it out themselves.
 - **Three more relationships: waitlisted, suspended and expired.** `access::classify_enrolment()`
   now tells an `enrol_apply` waiting-list row (status 2) that has not ended (`waitlisted`) from a
   fresh application (`pending`), a suspended row that has not ended (`suspended`), and a row whose
