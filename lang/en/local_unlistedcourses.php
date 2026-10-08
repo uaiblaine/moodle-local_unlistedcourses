@@ -33,6 +33,8 @@ $string['categorystate_help'] = 'Who may learn that this category exists.
 
 This is a listing rule, not a permission. It hides the category from the pages this site renders; web services, the mobile app, the Navigation block and course-list smart menus still name it, and a direct link to a course keeps following the course\'s own rules. Cohorts created at the site level do not count, and neither does the cohort an enrolment method restricts enrolments to: only a cohort defined at this category, or a role assigned here, opens it.';
 $string['categorystate_saved'] = 'Category discoverability saved';
+$string['defaultstate'] = 'Default discoverability for new courses';
+$string['defaultstate_desc'] = 'The discoverability a new course receives when the person or process creating it does not choose one. It is what the Discoverability field of the course form starts at, and the state given to a course created through a web service, a CSV upload, an approved course request or any other route that leaves that field out. A value chosen on the course form always wins. Public is not offered: publishing a course needs the permission to publish courses, held by whoever creates it. Only courses created after a change are affected.';
 $string['event_category_state_updated'] = 'Course category discoverability state updated';
 $string['event_course_state_updated'] = 'Course discoverability state updated';
 $string['pluginname'] = 'Course discoverability';
@@ -64,6 +66,8 @@ $string['privacy:metadata:local_unlistedcourses_state:timemodified'] = 'When the
 $string['privacy:metadata:local_unlistedcourses_state:usermodified'] = 'The user who last changed the state.';
 $string['restore_publicclamped'] = 'The course was public in the backup, but the user restoring it may not publish courses here. The public state was not applied.';
 $string['restore_statenotapplied'] = 'The discoverability state in the backup was not applied: the user restoring it may not change the state of the target course.';
+$string['restoredefaultstate'] = 'Discoverability of a restored course whose backup has none';
+$string['restoredefaultstate_desc'] = 'The discoverability a course receives when a backup is restored as a new course and the backup carries no discoverability, as a backup taken on a site without this plugin does. A backup that carries a value keeps it, and a restore into an existing course leaves that course\'s state as it is. A course created by a CSV upload from a template backup is created first, so it receives the default for new courses instead.';
 $string['state'] = 'Discoverability';
 $string['state_default'] = 'Listed';
 $string['state_help'] = 'Who may learn that this course exists.
