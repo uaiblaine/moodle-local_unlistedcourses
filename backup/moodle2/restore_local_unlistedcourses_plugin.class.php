@@ -31,8 +31,8 @@ use local_unlistedcourses\discoverability;
  * capability is checked there, against the restoring user - the task's user,
  * not $USER - in the target course. Nobody consents to publishing a course by
  * restoring a backup: when set_state() refuses, the target keeps the state it
- * already had (listed for a new course, whatever it was for an overwrite) and
- * the refusal is logged. There is deliberately no clamp of an incoming public
+ * already had (for a new course, the restore default; whatever it was for an
+ * overwrite) and the refusal is logged. There is deliberately no clamp of an incoming public
  * state to listed ahead of that call: on an overwrite restore into an unlisted
  * course, such a clamp would turn a refusal into an un-hiding write.
  *
@@ -42,7 +42,8 @@ use local_unlistedcourses\discoverability;
  * value given in the CSV over the template's, and no CSV column can do the same
  * for this state.
  *
- * A backup taken on a site without this plugin carries no element at all. When
+ * A backup taken on a site without this plugin carries no element at all, and one
+ * may carry a value that was not applied (unknown here, or a refused public). When
  * such a backup is restored as a new course, the course receives the site's
  * restore default ({@see discoverability::get_restore_default()}) from
  * after_execute_course(), which core calls on this object whether or not the
@@ -54,8 +55,8 @@ use local_unlistedcourses\discoverability;
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 class restore_local_unlistedcourses_plugin extends restore_local_plugin {
-    /** @var bool Whether course.xml carried the state element, whatever its value. */
-    protected bool $stateinbackup = false;
+    /** @var bool Whether a state from the backup was applied: set only after set_state() succeeded. */
+    protected bool $stateapplied = false;
 
     /**
      * Declare the state path inside course.xml.
@@ -71,16 +72,19 @@ class restore_local_unlistedcourses_plugin extends restore_local_plugin {
     /**
      * Restore the state row.
      *
+     * The flag read by after_execute_course() records the effect, not the sight of the element: it is set
+     * only once set_state() has succeeded. A value this version does not know, and a value set_state()
+     * refuses (public, for a restorer without the publish capability), leave it false, so a new course
+     * falls back to the restore default, which is listed or unlisted and never public.
+     *
      * @param array $data The parsed state element.
      * @return void
      */
     public function process_local_unlistedcourses_state($data) {
-        // Any element counts as a value, an unknown one included: the backup's site had the plugin.
-        $this->stateinbackup = true;
         $data = (object) $data;
         $state = (int) $data->state;
         if (!in_array($state, discoverability::states(), true)) {
-            // A value this version does not know is skipped: the target keeps the state it has.
+            // A value this version does not know is skipped: the target keeps the state it has, or gets the default.
             return;
         }
 
@@ -89,6 +93,7 @@ class restore_local_unlistedcourses_plugin extends restore_local_plugin {
 
         try {
             discoverability::set_state($courseid, $state, $userid);
+            $this->stateapplied = true;
         } catch (\required_capability_exception $e) {
             $key = ($state === discoverability::STATE_PUBLIC) ? 'restore_publicclamped' : 'restore_statenotapplied';
             $this->task->log(get_string($key, 'local_unlistedcourses'), backup::LOG_WARNING);
@@ -96,7 +101,11 @@ class restore_local_unlistedcourses_plugin extends restore_local_plugin {
     }
 
     /**
-     * Give a new course restored from a backup without the element the site's restore default.
+     * Give a new course the site's restore default when no state from the backup was applied.
+     *
+     * That covers a backup without the element, one whose value this version does not know and one
+     * whose public value was refused to the restorer; the default is never public, so none of them
+     * can end more visible than the admin chose.
      *
      * Core launches this after parsing course.xml for every processing object
      * registered on the course element (restore_structure_step::execute() calls
@@ -108,7 +117,7 @@ class restore_local_unlistedcourses_plugin extends restore_local_plugin {
      * @return void
      */
     protected function after_execute_course() {
-        if ($this->stateinbackup || $this->task->get_target() != backup::TARGET_NEW_COURSE) {
+        if ($this->stateapplied || $this->task->get_target() != backup::TARGET_NEW_COURSE) {
             return;
         }
         $courseid = (int) $this->task->get_courseid();

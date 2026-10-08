@@ -23,8 +23,9 @@ allow-list and next-action entries below are `2026042003`; the queue rule and th
 - **Discoverability of a restored course whose backup has none**
   (`local_unlistedcourses/restoredefaultstate`, listed or unlisted, default listed). Applied only
   when a backup without this plugin's element - one taken on a site without the plugin - is
-  restored as a new course, from the restore plugin's `after_execute_course()`. A backup that
-  carries a value keeps it, and a restore into an existing course never receives it.
+  restored as a new course, from the restore plugin's `after_execute_course()`. A backup whose
+  value is applied keeps it (an unknown value, or a public one refused to the restorer, gets the
+  default, which is never public), and a restore into an existing course never receives it.
 - A settings page for the plugin, under *Site administration > Plugins > Local plugins*.
 
 - **Three more relationships: waitlisted, suspended and expired.** `access::classify_enrolment()`
