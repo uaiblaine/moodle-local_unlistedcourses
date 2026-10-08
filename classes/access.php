@@ -172,6 +172,7 @@ class access {
         'guest' => null,
         'conditional' => null,
         'blocked' => null,
+        'opens' => null,
     ];
 
     /** @var array Request cache of the enrolment relationship, keyed "userid:courseid" => classification. */
@@ -722,6 +723,17 @@ class access {
      * `guest` and `conditional` describe offers and are filled whenever one exists, whatever the
      * summary; `blocked` is filled only when the summary is blocked.
      *
+     * `opens` is when a refused route would take the viewer: the earliest enrolment start date
+     * still ahead among the instances whose ONLY refusal is that their window has not opened yet.
+     * Each such instance is asked again by the same rule, as if its window were open
+     * ({@see opening_date()}), and counts when it then offers a route (self, apply, fee, paypal,
+     * autoenrol). An instance that would still refuse - full, a cohort, the viewer's own row, new
+     * enrolments off, the self enrolment capability, autoenrol's rule - gives no date, nor does a
+     * window that has closed or one that ends before it starts, nor enrol_coursecompleted, which
+     * offers no route. Filled only when the summary is blocked, whose reason is then window (no
+     * other check of these methods refuses an instance whose only refusal is its start date).
+     * Consumers print this date and never work one out themselves: the rule lives here.
+     *
      * The methods and what each is asked - the question its own enrolment page asks:
      *
      * - self (route): can_self_enrol(), strictly true.
@@ -751,7 +763,7 @@ class access {
      * @param int $courseid The course id.
      * @return array {type: NEXT_*, routes: array of {kind: the enrol plugin name, instanceid: int},
      *         guest: GUEST_*|null, conditional: {prerequisiteid: int, instanceid: int}|null,
-     *         blocked: BLOCKED_*|null}.
+     *         blocked: BLOCKED_*|null, opens: int|null, a timestamp}.
      */
     public static function get_next_action(int $courseid): array {
         global $USER;
@@ -786,7 +798,7 @@ class access {
      *
      * @param int $courseid The course id.
      * @param bool $withreasons Whether to work out why a refusing method refuses.
-     * @return array The answer, shaped as {@see get_next_action()}'s; blocked is null when reasons were skipped.
+     * @return array The answer, shaped as {@see get_next_action()}'s; blocked and opens are null when reasons were skipped.
      */
     private static function evaluate_next_action(int $courseid, bool $withreasons): array {
         global $CFG;
@@ -805,9 +817,18 @@ class access {
                 continue;
             }
             $outcome = self::instance_outcome($instance, $plugin, $now, $withreasons);
-            if ($outcome !== null) {
-                $outcomes[] = $outcome;
+            if ($outcome === null) {
+                continue;
             }
+            if ($withreasons && $outcome['type'] === self::NEXT_BLOCKED) {
+                $outcome['opens'] = self::opening_date(
+                    $instance,
+                    $now,
+                    fn(\stdClass $opened): bool =>
+                        (self::instance_outcome($opened, $plugin, $now, false)['type'] ?? null) === self::NEXT_OPEN
+                );
+            }
+            $outcomes[] = $outcome;
         }
         return self::summarise($outcomes);
     }
@@ -938,6 +959,12 @@ class access {
      * therefore never decide whether a course may be named: discoverability always goes through
      * {@see filter_courses()}, which asks the plugins.
      *
+     * The opening date is the exception, because a date is a promise a card prints: it may only
+     * err towards null. Before dating an instance the batch reads the two dropped checks
+     * ({@see batch_vouches()}): the capability from the course context, preloaded by the first
+     * statement and checked against the viewer's access data, loaded once per request; and the
+     * autoenrol rule, which it cannot judge, so an instance with one is never dated here.
+     *
      * The course ids go into one IN list, and get_in_or_equal() does not chunk: pass a page of
      * courses, never a whole population. A visitor, the guest account, the site course and an id
      * with no instance answer none; a visitor and the guest account cost no statement.
@@ -976,16 +1003,23 @@ class access {
         // 1. The enabled instances, in each course's own order of methods.
         [$coursesql, $courseparams] = $DB->get_in_or_equal($asked, SQL_PARAMS_NAMED, 'crs');
         [$pluginsql, $pluginparams] = $DB->get_in_or_equal(array_keys($plugins), SQL_PARAMS_NAMED, 'plg');
+        $ctxfields = \core\context_helper::get_preload_record_columns_sql('ctx');
         $instances = $DB->get_records_sql(
             "SELECT e.id, e.courseid, e.enrol, e.enrolstartdate, e.enrolenddate, e.password, e.cost,
-                    e.customint1, e.customint3, e.customint4, e.customint5, e.customint6, e.customint8
+                    e.customint1, e.customint3, e.customint4, e.customint5, e.customint6, e.customint8,
+                    e.customtext2, {$ctxfields}
                FROM {enrol} e
+          LEFT JOIN {context} ctx ON ctx.instanceid = e.courseid AND ctx.contextlevel = :courselevel
               WHERE e.courseid {$coursesql} AND e.status = :enabled AND e.enrol {$pluginsql}
            ORDER BY e.sortorder, e.id",
-            $courseparams + $pluginparams + ['enabled' => ENROL_INSTANCE_ENABLED]
+            $courseparams + $pluginparams + ['enabled' => ENROL_INSTANCE_ENABLED, 'courselevel' => CONTEXT_COURSE]
         );
         if (!$instances) {
             return $answers;
+        }
+        // Cache the course contexts, so the capability batch_vouches() checks costs no statement per course.
+        foreach ($instances as $instance) {
+            \core\context_helper::preload_from_record($instance);
         }
 
         // 2. Every row the viewer holds; rides the userid foreign key of {user_enrolments}.
@@ -1056,8 +1090,9 @@ class access {
         $outcomes = [];
         foreach ($instances as $instance) {
             $id = (int) $instance->id;
-            $outcome = self::batch_outcome(
-                $instance,
+            // The same facts judge the instance as it is and, for its opening date, as if its window were open.
+            $judge = fn(\stdClass $candidate): ?array => self::batch_outcome(
+                $candidate,
                 $plugins[$instance->enrol],
                 $now,
                 isset($held[$id]),
@@ -1067,9 +1102,19 @@ class access {
                 isset($incourse[(int) $instance->courseid]),
                 isset($active[(int) $instance->customint1])
             );
-            if ($outcome !== null) {
-                $outcomes[(int) $instance->courseid][] = $outcome;
+            $outcome = $judge($instance);
+            if ($outcome === null) {
+                continue;
             }
+            if ($outcome['type'] === self::NEXT_BLOCKED) {
+                $outcome['opens'] = self::opening_date(
+                    $instance,
+                    $now,
+                    fn(\stdClass $opened): bool =>
+                        ($judge($opened)['type'] ?? null) === self::NEXT_OPEN && self::batch_vouches($opened)
+                );
+            }
+            $outcomes[(int) $instance->courseid][] = $outcome;
         }
         foreach ($outcomes as $courseid => $courseoutcomes) {
             $answers[$courseid] = self::summarise($courseoutcomes);
@@ -1136,6 +1181,53 @@ class access {
             default:
                 return null;
         }
+    }
+
+    /**
+     * When an instance's enrolment window opens, if that window is the only thing refusing the viewer.
+     *
+     * The instance is asked again by the caller's own rule with its start date cleared, which is
+     * the window open and every other fact as it is now: a route then means nothing but the start
+     * date refuses. A start date that is not ahead gives none, so a closed window or an open one
+     * never reads as "opens", and neither does a window that ends before it starts, which would
+     * read open with its start cleared but never opens.
+     *
+     * @param \stdClass $instance Enrol instance carrying enrolstartdate and enrolenddate.
+     * @param int $now The time the window is judged against.
+     * @param callable $offersroute Takes the instance with its window open; true when it then offers a route.
+     * @return int|null The start date, or null when the instance would not take the viewer once it opens.
+     */
+    private static function opening_date(\stdClass $instance, int $now, callable $offersroute): ?int {
+        $start = (int) $instance->enrolstartdate;
+        $end = (int) $instance->enrolenddate;
+        if ($start <= $now || ($end !== 0 && $end < $start)) {
+            return null;
+        }
+        $opened = clone $instance;
+        $opened->enrolstartdate = 0;
+        return $offersroute($opened) ? $start : null;
+    }
+
+    /**
+     * Whether the batch may date an opening: the two checks it drops, read for a date only.
+     *
+     * enrol_self's capability is checked as can_self_enrol() checks it, in the course context
+     * the batch preloaded. enrol_autoenrol's rule is judged per user by availability conditions,
+     * which the batch cannot do, so an instance with a rule is never dated here - the test is
+     * check_rule()'s own empty(). Every other method's rule is read in full by the batch.
+     *
+     * @param \stdClass $instance Enrol instance, as the batch read it.
+     * @return bool True when nothing the batch dropped could refuse the viewer.
+     */
+    private static function batch_vouches(\stdClass $instance): bool {
+        if ($instance->enrol === 'self') {
+            $context = \core\context\course::instance((int) $instance->courseid, IGNORE_MISSING);
+            return $context && has_capability('enrol/self:enrolself', $context);
+        }
+        if ($instance->enrol === 'autoenrol') {
+            return empty($instance->customtext2);
+        }
+        return true;
     }
 
     /**
@@ -1299,7 +1391,8 @@ class access {
      * @param \stdClass $instance Enrol instance.
      * @param string $type NEXT_OPEN, NEXT_GUEST, NEXT_CONDITIONAL or NEXT_BLOCKED.
      * @param string|null $blocked The BLOCKED_* reason of a refusal, when known.
-     * @return array {type, kind: the plugin name, instanceid, guest: GUEST_*|null, prerequisiteid: int, blocked}.
+     * @return array {type, kind: the plugin name, instanceid, guest: GUEST_*|null, prerequisiteid: int, blocked,
+     *         opens: int|null, filled by the caller from {@see opening_date()}}.
      */
     private static function outcome(\stdClass $instance, string $type, ?string $blocked = null): array {
         return [
@@ -1309,6 +1402,7 @@ class access {
             'guest' => null,
             'prerequisiteid' => 0,
             'blocked' => $blocked,
+            'opens' => null,
         ];
     }
 
@@ -1317,7 +1411,8 @@ class access {
      *
      * Open beats guest, guest beats conditional, conditional beats blocked; free guest access
      * beats guest access behind a key; the first conditional instance is the one reported; the
-     * reason of a blocked summary is the most useful one any refusing instance gave.
+     * reason of a blocked summary is the most useful one any refusing instance gave, and its
+     * opening date the earliest any refusing instance gave.
      *
      * @param array $outcomes The outcomes ({@see outcome()}), in the course's order of methods.
      * @return array The answer, shaped as {@see get_next_action()}'s.
@@ -1327,6 +1422,7 @@ class access {
         $guest = null;
         $conditional = null;
         $blocked = null;
+        $opens = null;
         $refused = false;
         foreach ($outcomes as $outcome) {
             if ($outcome['type'] === self::NEXT_OPEN) {
@@ -1342,6 +1438,9 @@ class access {
             } else {
                 $refused = true;
                 $blocked = self::more_useful($blocked, $outcome['blocked']);
+                if ($outcome['opens'] !== null && ($opens === null || $outcome['opens'] < $opens)) {
+                    $opens = $outcome['opens'];
+                }
             }
         }
 
@@ -1363,6 +1462,7 @@ class access {
             'guest' => $guest,
             'conditional' => $conditional,
             'blocked' => $type === self::NEXT_BLOCKED ? $blocked : null,
+            'opens' => $type === self::NEXT_BLOCKED ? $opens : null,
         ];
     }
 

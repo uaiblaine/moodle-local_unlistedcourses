@@ -495,8 +495,23 @@ final class next_action_test extends \advanced_testcase {
             $this->assertSame(access::NEXT_BLOCKED, $method->invoke(null, [$second, $first])['type']);
         }
 
+        $later = self::outcome_of(access::NEXT_BLOCKED, 'self', 7, null, 0, access::BLOCKED_WINDOW, 1800000000);
+        $sooner = self::outcome_of(access::NEXT_BLOCKED, 'fee', 8, null, 0, access::BLOCKED_WINDOW, 1700000000);
+        $undated = $refusal(access::BLOCKED_WINDOW, 9);
+        $this->assertSame(1700000000, $method->invoke(null, [$later, $undated, $sooner])['opens'], 'The earliest opening, last.');
+        $this->assertSame(1700000000, $method->invoke(null, [$sooner, $undated, $later])['opens'], 'The earliest opening, first.');
+        $this->assertNull($method->invoke(null, [$undated])['opens'], 'A refusal with no date dates nothing.');
+        $this->assertNull($method->invoke(null, [$sooner, $open])['opens'], 'An opening is reported only for a blocked summary.');
+
         $this->assertSame(
-            ['type' => access::NEXT_NONE, 'routes' => [], 'guest' => null, 'conditional' => null, 'blocked' => null],
+            [
+                'type' => access::NEXT_NONE,
+                'routes' => [],
+                'guest' => null,
+                'conditional' => null,
+                'blocked' => null,
+                'opens' => null,
+            ],
             $method->invoke(null, []),
             'Nothing on offer is none.'
         );
@@ -511,6 +526,7 @@ final class next_action_test extends \advanced_testcase {
      * @param string|null $guest A GUEST_* constant, for guest access.
      * @param int $prerequisite The prerequisite course, for a conditional outcome.
      * @param string|null $blocked A BLOCKED_* constant, for a refusal.
+     * @param int|null $opens The opening date of a refusal, when its window is all that refuses.
      * @return array The outcome.
      */
     private static function outcome_of(
@@ -519,7 +535,8 @@ final class next_action_test extends \advanced_testcase {
         int $id,
         ?string $guest = null,
         int $prerequisite = 0,
-        ?string $blocked = null
+        ?string $blocked = null,
+        ?int $opens = null
     ): array {
         return [
             'type' => $type,
@@ -528,17 +545,20 @@ final class next_action_test extends \advanced_testcase {
             'guest' => $guest,
             'prerequisiteid' => $prerequisite,
             'blocked' => $blocked,
+            'opens' => $opens,
         ];
     }
 
     /**
      * Build one course per shape, for the shape tests below.
      *
-     * Each entry carries what the per-course path must answer and, where the batch drops a check
-     * it cannot read in SQL, what the batch answers instead.
+     * Each entry carries what the per-course path must answer, its opening date, and, where the
+     * batch drops a check it cannot read in SQL, what the batch answers instead and the date it
+     * gives. Every date is an explicit timestamp taken once, so both paths are held to the second.
      *
      * @param \stdClass $viewer The viewer the answers are for.
-     * @return array Label => ['course' => int, 'expected' => compact answer, 'batch' => compact answer|null].
+     * @return array Label => ['course' => int, 'expected' => compact answer, 'opens' => int|null,
+     *         'batch' => compact answer|null, 'batchopens' => int|null].
      */
     private function build_shapes(\stdClass $viewer): array {
         global $DB;
@@ -549,22 +569,32 @@ final class next_action_test extends \advanced_testcase {
         $foreign = $generator->create_cohort();
         cohort_add_member($member->id, $viewer->id);
         $now = time();
+        $tomorrow = $now + DAYSECS;
         $shapes = [];
         $make = function (
             string $label,
             array $expected,
             callable $setup,
-            ?array $batch = null
+            ?array $batch = null,
+            ?int $opens = null,
+            ?int $batchopens = null
         ) use (
             &$shapes,
             $generator
         ): void {
             $course = $generator->create_course(['fullname' => $label]);
             $setup($course);
-            $shapes[$label] = ['course' => (int) $course->id, 'expected' => $expected, 'batch' => $batch];
+            $shapes[$label] = [
+                'course' => (int) $course->id,
+                'expected' => $expected,
+                'opens' => $opens,
+                'batch' => $batch,
+                'batchopens' => $batch === null ? $opens : $batchopens,
+            ];
         };
         $open = fn(array $kinds, ?string $guest = null) => [access::NEXT_OPEN, $kinds, $guest, null, null];
         $blocked = fn(string $reason) => [access::NEXT_BLOCKED, [], null, null, $reason];
+        $window = $blocked(access::BLOCKED_WINDOW);
 
         $make('self open', $open(['self']), function ($c) {
             $this->add_instance($c, 'self', ['customint6' => 1]);
@@ -572,9 +602,9 @@ final class next_action_test extends \advanced_testcase {
         $make('self new enrolments off', $blocked(access::BLOCKED_OFF), function ($c) {
             $this->add_instance($c, 'self', ['customint6' => 0]);
         });
-        $make('self window not open yet', $blocked(access::BLOCKED_WINDOW), function ($c) use ($now) {
-            $this->add_instance($c, 'self', ['customint6' => 1, 'enrolstartdate' => $now + DAYSECS]);
-        });
+        $make('self window not open yet', $blocked(access::BLOCKED_WINDOW), function ($c) use ($tomorrow) {
+            $this->add_instance($c, 'self', ['customint6' => 1, 'enrolstartdate' => $tomorrow]);
+        }, null, $tomorrow);
         $make('self window closed', $blocked(access::BLOCKED_WINDOW), function ($c) use ($now) {
             $this->add_instance($c, 'self', ['customint6' => 1, 'enrolenddate' => $now - DAYSECS]);
         });
@@ -634,9 +664,40 @@ final class next_action_test extends \advanced_testcase {
             $this->add_instance($c, 'self', ['customint6' => 1]);
             $this->add_instance($c, 'fee', ['cost' => 10, 'currency' => 'USD']);
         });
-        $make('the most useful reason wins', $blocked(access::BLOCKED_WINDOW), function ($c) use ($now) {
+        $make('the most useful reason wins', $blocked(access::BLOCKED_WINDOW), function ($c) use ($tomorrow) {
             $this->add_instance($c, 'fee', ['cost' => 0, 'currency' => 'USD']);
-            $this->add_instance($c, 'self', ['customint6' => 1, 'enrolstartdate' => $now + DAYSECS]);
+            $this->add_instance($c, 'self', ['customint6' => 1, 'enrolstartdate' => $tomorrow]);
+        }, null, $tomorrow);
+        $make('self window not open yet and full', $window, function ($c) use ($other, $tomorrow) {
+            $instance = $this->add_instance($c, 'self', ['customint6' => 1, 'customint3' => 1, 'enrolstartdate' => $tomorrow]);
+            $this->add_row((int) $instance->id, (int) $other->id, ENROL_USER_ACTIVE);
+        });
+        $make('self window not open yet, cohort non-member', $window, function ($c) use ($foreign, $tomorrow) {
+            $this->add_instance($c, 'self', ['customint6' => 1, 'customint5' => $foreign->id, 'enrolstartdate' => $tomorrow]);
+        });
+        $make('self window not open yet, own row', $window, function ($c) use ($viewer, $tomorrow) {
+            $instance = $this->add_instance($c, 'self', ['customint6' => 1, 'enrolstartdate' => $tomorrow]);
+            $this->add_row((int) $instance->id, (int) $viewer->id, ENROL_USER_SUSPENDED);
+        });
+        $make('self window not open yet, capability prohibited', $window, function ($c) use ($DB, $tomorrow) {
+            $this->add_instance($c, 'self', ['customint6' => 1, 'enrolstartdate' => $tomorrow]);
+            $userrole = (int) $DB->get_field('role', 'id', ['shortname' => 'user']);
+            assign_capability('enrol/self:enrolself', CAP_PROHIBIT, $userrole, \core\context\course::instance($c->id)->id, true);
+        });
+        $make('self window that ends before it opens', $window, function ($c) use ($now) {
+            $this->add_instance($c, 'self', [
+                'customint6' => 1,
+                'enrolstartdate' => $now + 5 * DAYSECS,
+                'enrolenddate' => $now + 2 * DAYSECS,
+            ]);
+        });
+        $make('two windows not open yet, the earlier second', $window, function ($c) use ($now) {
+            $this->add_instance($c, 'self', ['customint6' => 1, 'enrolstartdate' => $now + 5 * DAYSECS]);
+            $this->add_instance($c, 'fee', ['cost' => 10, 'currency' => 'USD', 'enrolstartdate' => $now + 2 * DAYSECS]);
+        }, null, $now + 2 * DAYSECS);
+        $make('self window not open yet beside an open fee', $open(['fee']), function ($c) use ($tomorrow) {
+            $this->add_instance($c, 'self', ['customint6' => 1, 'enrolstartdate' => $tomorrow]);
+            $this->add_instance($c, 'fee', ['cost' => 10, 'currency' => 'USD']);
         });
         $make('manual only', [access::NEXT_NONE, [], null, null, null], function ($c) {
         });
@@ -659,8 +720,12 @@ final class next_action_test extends \advanced_testcase {
                 $instance = $this->add_instance($c, 'apply', ['customint6' => 1, 'customint3' => 1]);
                 $this->add_row((int) $instance->id, (int) $other->id, ENROL_USER_SUSPENDED);
             });
-            $make('apply window not open yet', $blocked(access::BLOCKED_WINDOW), function ($c) use ($now) {
-                $this->add_instance($c, 'apply', ['customint6' => 1, 'enrolstartdate' => $now + DAYSECS]);
+            $make('apply window not open yet', $blocked(access::BLOCKED_WINDOW), function ($c) use ($tomorrow) {
+                $this->add_instance($c, 'apply', ['customint6' => 1, 'enrolstartdate' => $tomorrow]);
+            }, null, $tomorrow);
+            $make('apply window not open yet and full', $window, function ($c) use ($other, $tomorrow) {
+                $instance = $this->add_instance($c, 'apply', ['customint6' => 1, 'customint3' => 1, 'enrolstartdate' => $tomorrow]);
+                $this->add_row((int) $instance->id, (int) $other->id, ENROL_USER_SUSPENDED);
             });
             $make('apply new applications off', $blocked(access::BLOCKED_OFF), function ($c) {
                 $this->add_instance($c, 'apply', ['customint6' => 0]);
@@ -677,6 +742,24 @@ final class next_action_test extends \advanced_testcase {
                 $this->add_instance($c, 'autoenrol', ['customint1' => 0, 'customint4' => 1, 'customint8' => 0]);
                 $this->getDataGenerator()->enrol_user($viewer->id, $c->id, null, 'manual', 0, 0, ENROL_USER_SUSPENDED);
             });
+            $make('autoenrol window not open yet', $window, function ($c) use ($tomorrow) {
+                $this->add_instance($c, 'autoenrol', [
+                    'customint1' => 0,
+                    'customint4' => 1,
+                    'customint8' => 0,
+                    'enrolstartdate' => $tomorrow,
+                ]);
+            }, null, $tomorrow);
+            // A rule that admits everybody: the plugin dates it, the batch cannot judge a rule and dates nothing.
+            $make('autoenrol window not open yet behind a rule', $window, function ($c) use ($tomorrow) {
+                $this->add_instance($c, 'autoenrol', [
+                    'customint1' => 0,
+                    'customint4' => 1,
+                    'customint8' => 0,
+                    'enrolstartdate' => $tomorrow,
+                    'customtext2' => '{"op":"&","c":[],"showc":[]}',
+                ]);
+            }, $window, $tomorrow, null);
         }
         if (enrol_get_plugin('coursecompleted')) {
             $prerequisite = $generator->create_course();
@@ -691,6 +774,10 @@ final class next_action_test extends \advanced_testcase {
             });
             $make('course completed window closed', $blocked(access::BLOCKED_WINDOW), function ($c) use ($prerequisite, $now) {
                 $this->add_instance($c, 'coursecompleted', ['customint1' => $prerequisite->id, 'enrolenddate' => $now - 9]);
+            });
+            // It offers no route, only a promise on completion, so its start date is no opening.
+            $make('course completed window not open yet', $window, function ($c) use ($prerequisite, $tomorrow) {
+                $this->add_instance($c, 'coursecompleted', ['customint1' => $prerequisite->id, 'enrolstartdate' => $tomorrow]);
             });
             $guestfirst = [access::NEXT_GUEST, [], access::GUEST_FREE, (int) $prerequisite->id, null];
             $make('guest beats course completed', $guestfirst, function ($c) use ($prerequisite) {
@@ -727,9 +814,11 @@ final class next_action_test extends \advanced_testcase {
      * pass by calling everything open. The batch must give the same answer, routes and instance
      * ids included, except where it drops a check it cannot read in SQL - here the self
      * enrolment capability - and there it may only answer open where the per-course path says
-     * blocked. can_enrol() is asked through the unlisted predicate on every shape: beside a
-     * relationship that keeps the course, it must say yes exactly where the next action is open,
-     * guest or conditional.
+     * blocked. The opening date is asserted on both paths for every shape, null included; where
+     * the batch drops a check it may give no date where the per-course path gives one, and never
+     * a date the per-course path does not give. can_enrol() is asked through the unlisted
+     * predicate on every shape: beside a relationship that keeps the course, it must say yes
+     * exactly where the next action is open, guest or conditional.
      *
      * @return void
      */
@@ -749,7 +838,12 @@ final class next_action_test extends \advanced_testcase {
         foreach ($shapes as $label => $shape) {
             $single = access::get_next_action($shape['course']);
             $this->assertSame($shape['expected'], self::compact($single), "{$label}: per course");
+            $this->assertSame($shape['opens'], $single['opens'], "{$label}: the opening per course");
             $many = $batch[$shape['course']];
+            $this->assertSame($shape['batchopens'], $many['opens'], "{$label}: the opening in the batch");
+            if ($many['opens'] !== null) {
+                $this->assertSame($single['opens'], $many['opens'], "{$label}: the batch never invents a date");
+            }
             if ($shape['batch'] === null) {
                 $this->assertSame($single, $many, "{$label}: the batch gives the same answer");
             } else {
@@ -763,8 +857,9 @@ final class next_action_test extends \advanced_testcase {
                 $this->assertSame(access::NEXT_OPEN, $many['type'], "{$label}: an open course is open in the batch");
             }
         }
-        $this->assertGreaterThanOrEqual(22, count($shapes), 'Precondition: every core shape was built.');
-        $this->assertSame(1, $exceptions, 'Precondition: the dropped check was exercised.');
+        $this->assertGreaterThanOrEqual(29, count($shapes), 'Precondition: every core shape was built.');
+        $ruled = isset($shapes['autoenrol window not open yet behind a rule']) ? 1 : 0;
+        $this->assertSame(1 + $ruled, $exceptions, 'Precondition: the dropped checks were exercised.');
 
         foreach ($shapes as $shape) {
             $this->set_course_state($shape['course'], discoverability::STATE_UNLISTED);
@@ -835,6 +930,50 @@ final class next_action_test extends \advanced_testcase {
     }
 
     /**
+     * The batch dates the opening of forty courses for the statements it pays for two.
+     *
+     * Each course holds a self instance whose window opens at the same explicit time, and nothing
+     * else refuses the viewer, so every course is dated, and every date asks the self enrolment
+     * capability. The course contexts come with the instances and the viewer's access data is
+     * loaded once, so the capability costs no statement per course: no cohort, no cap, two
+     * statements for either set. The per-course path is the control for one course.
+     *
+     * @return void
+     */
+    public function test_the_batch_dates_an_opening_without_a_statement_per_course(): void {
+        $generator = $this->getDataGenerator();
+        $opens = time() + 3 * DAYSECS;
+        $seed = function (int $count) use ($generator, $opens): array {
+            $ids = [];
+            for ($i = 0; $i < $count; $i++) {
+                $course = $generator->create_course();
+                $this->add_instance($course, 'self', ['customint6' => 1, 'enrolstartdate' => $opens]);
+                $ids[] = (int) $course->id;
+            }
+            return $ids;
+        };
+        $small = $seed(2);
+        $large = $seed(40);
+
+        $this->become($generator->create_user());
+        access::get_next_actions($small);
+        access::get_next_actions($large);
+        $smallreads = $this->reads(fn() => access::get_next_actions($small));
+        $answers = [];
+        $largereads = $this->reads(function () use ($large, &$answers) {
+            $answers = access::get_next_actions($large);
+        });
+        $this->assertSame($smallreads, $largereads, "{$smallreads} reads for two courses, {$largereads} for forty.");
+        $this->assertSame(2, $largereads, 'The instances and the viewer\'s rows.');
+        foreach ($large as $courseid) {
+            $this->assertSame(access::NEXT_BLOCKED, $answers[$courseid]['type']);
+            $this->assertSame(access::BLOCKED_WINDOW, $answers[$courseid]['blocked']);
+            $this->assertSame($opens, $answers[$courseid]['opens']);
+        }
+        $this->assertSame($answers[$large[39]], access::get_next_action($large[39]), 'Control: the per-course path agrees.');
+    }
+
+    /**
      * A visitor, the guest account and the site course are offered nothing; nobody is asked about them.
      *
      * The control is a logged-in user, offered the guest access the same course has.
@@ -846,7 +985,14 @@ final class next_action_test extends \advanced_testcase {
         $course = $generator->create_course();
         $this->enable_default($course, 'guest');
         $this->raw_instance(SITEID, 'guest', ENROL_INSTANCE_ENABLED, ['password' => '']);
-        $none = ['type' => access::NEXT_NONE, 'routes' => [], 'guest' => null, 'conditional' => null, 'blocked' => null];
+        $none = [
+            'type' => access::NEXT_NONE,
+            'routes' => [],
+            'guest' => null,
+            'conditional' => null,
+            'blocked' => null,
+            'opens' => null,
+        ];
         $courseid = (int) $course->id;
 
         $this->become($generator->create_user());
@@ -926,15 +1072,16 @@ final class next_action_test extends \advanced_testcase {
      * A listing probes unlisted courses nobody is related to, and every one of them is refused by
      * something; the reason is the next action's business, not the listing's. A self instance
      * whose window is shut is refused by enrol_self without a statement, so the course costs the
-     * listing exactly what a course with no route at all costs. The next action of the same
-     * course does explain it.
+     * listing exactly what a course with no route at all costs - the opening date, which asks the
+     * plugin again, included. The next action of the same course does explain it, and dates it.
      *
      * @return void
      */
     public function test_the_listing_does_not_pay_for_the_reason_of_a_refusal(): void {
         $generator = $this->getDataGenerator();
         $shut = $generator->create_course();
-        $this->add_instance($shut, 'self', ['customint6' => 1, 'enrolstartdate' => time() + DAYSECS]);
+        $opens = time() + DAYSECS;
+        $this->add_instance($shut, 'self', ['customint6' => 1, 'enrolstartdate' => $opens]);
         $bare = $generator->create_course();
         $warm = $generator->create_course();
         foreach ([$shut, $bare, $warm] as $course) {
@@ -954,5 +1101,6 @@ final class next_action_test extends \advanced_testcase {
             self::compact(access::get_next_action((int) $shut->id)),
             'Control: the next action explains the refusal.'
         );
+        $this->assertSame($opens, access::get_next_action((int) $shut->id)['opens'], 'Control: and dates the opening.');
     }
 }

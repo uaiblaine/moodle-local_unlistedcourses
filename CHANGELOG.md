@@ -6,12 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-Version `2026042003`. The relationship, allow-list and next-action entries below are
-`2026042003`; the queue rule and the new routes were `2026042002`, and the scheduled-enrolment and
-course-deletion entries `2026042001`.
+Version `2026042005`. The opening-date entry below is `2026042005`; the relationship, allow-list
+and next-action entries are `2026042003`; the queue rule and the new routes were `2026042002`, and
+the scheduled-enrolment and course-deletion entries `2026042001`.
 
 ### Added
 
+- **The next action dates the opening of a window: `opens`.** `get_next_action()` and
+  `get_next_actions()` gain a key `opens`, a timestamp or null: when the summary is `blocked`, the
+  earliest enrolment start date still ahead among the instances whose only refusal is that their
+  window has not opened yet - each asked again, by the same rule, as if its window were open, and
+  counted when it then offers a route (`self`, `apply`, `fee`, `paypal`, `autoenrol`). A closed
+  window, a window that ends before it starts, an instance that would still refuse (full, cohort,
+  own row, new enrolments off, the self enrolment capability) and `enrol_coursecompleted` give no
+  date. Every other key keeps its meaning. The batch stays within its statements: the first one
+  now carries the course contexts and the autoenrol rule, so it checks the self enrolment
+  capability before it dates an instance and never dates one behind an autoenrol rule; it may give
+  no date where the per-course form gives one, never the reverse. Learning-plan cards print it
+  ("Enrolment opens on ..."); consumers read it here and never work it out themselves.
 - **Three more relationships: waitlisted, suspended and expired.** `access::classify_enrolment()`
   now tells an `enrol_apply` waiting-list row (status 2) that has not ended (`waitlisted`) from a
   fresh application (`pending`), a suspended row that has not ended (`suspended`), and a row whose

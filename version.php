@@ -25,7 +25,7 @@
 defined('MOODLE_INTERNAL') || die();
 
 $plugin->component = 'local_unlistedcourses';
-$plugin->version = 2026042003;
+$plugin->version = 2026042005;
 $plugin->release = 'v5.2-r1';
 $plugin->requires = 2026042000;
 $plugin->supported = [502, 502];
