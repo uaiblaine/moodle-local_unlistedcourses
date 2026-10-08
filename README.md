@@ -162,8 +162,9 @@ a web service call, a CSV upload or a restore run by somebody without it would b
   wins, and updating a course never applies it.
 - **Discoverability of a restored course whose backup has none** (`restoredefaultstate`). A
   backup taken on a site without this plugin carries no state; restored as a new course, it gets
-  this one. A backup that carries a state keeps it (still behind the publish check), and a
-  restore into an existing course leaves that course's state alone. A course created by a CSV
+  this one. A backup whose state is applied keeps it; a state this version does not know, or a
+  public one refused because the restorer may not publish, gets the default too. A restore
+  into an existing course leaves that course's state alone. A course created by a CSV
   upload from a template backup is created first, so it gets the default for new courses.
 
 A category's state is written from one page, `local/unlistedcourses/category.php`, reached
