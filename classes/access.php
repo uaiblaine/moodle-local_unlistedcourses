@@ -730,9 +730,12 @@ class access {
      * autoenrol). An instance that would still refuse - full, a cohort, the viewer's own row, new
      * enrolments off, the self enrolment capability, autoenrol's rule - gives no date, nor does a
      * window that has closed or one that ends before it starts, nor enrol_coursecompleted, which
-     * offers no route. Filled only when the summary is blocked, whose reason is then window (no
-     * other check of these methods refuses an instance whose only refusal is its start date).
-     * Consumers print this date and never work one out themselves: the rule lives here.
+     * offers no route. Filled only when the summary is blocked; `blocked` stays the most useful
+     * reason across the instances, so it reads window unless another instance's refusal outranks
+     * it, and a consumer that shows the date reads `opens`, never `blocked`. Like an open route, a
+     * date says when the instance's own rule admits the viewer, not that a key, a payment or an
+     * enrolment by another method will not stand in the way. Consumers print this date and never
+     * work one out themselves: the rule lives here.
      *
      * The methods and what each is asked - the question its own enrolment page asks:
      *
