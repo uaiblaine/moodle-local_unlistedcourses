@@ -81,6 +81,12 @@ class discoverability {
     /** @var string The capability that gates entering and leaving the public state. */
     public const CAPABILITY_PUBLISH = 'local/unlistedcourses:publish';
 
+    /** @var string The setting holding the state a course created without an explicit one receives. */
+    public const SETTING_DEFAULT = 'defaultstate';
+
+    /** @var string The setting holding the state a new course restored from a backup without one receives. */
+    public const SETTING_RESTORE_DEFAULT = 'restoredefaultstate';
+
     /** @var array Request cache of the state, keyed courseid => int. */
     private static array $states = [];
 
@@ -94,6 +100,59 @@ class discoverability {
      */
     public static function states(): array {
         return [self::STATE_DEFAULT, self::STATE_UNLISTED, self::STATE_PUBLIC];
+    }
+
+    /**
+     * The states an administrator may choose as a default.
+     *
+     * Never public: publishing needs local/unlistedcourses:publish of whoever
+     * creates or restores the course, and a web service call, a CSV upload or a
+     * restore run by a user without it would be refused in set_state().
+     *
+     * @return array List of the state constants.
+     */
+    public static function default_states(): array {
+        return [self::STATE_DEFAULT, self::STATE_UNLISTED];
+    }
+
+    /**
+     * The state a course created without an explicit one receives.
+     *
+     * Read by {@see local\courseform}: the select's default for a new course, and
+     * the state applied when create_course() is called without the element.
+     *
+     * @return int One of {@see default_states()}.
+     */
+    public static function get_creation_default(): int {
+        return self::read_default(self::SETTING_DEFAULT);
+    }
+
+    /**
+     * The state a new course restored from a backup that carries none receives.
+     *
+     * @return int One of {@see default_states()}.
+     */
+    public static function get_restore_default(): int {
+        return self::read_default(self::SETTING_RESTORE_DEFAULT);
+    }
+
+    /**
+     * Read a default setting, reading anything outside the choices as listed.
+     *
+     * An unset setting (a site that has not visited the upgrade's settings page
+     * yet) and a value written by hand, public included, both read as listed,
+     * which is what the plugin did before the settings existed.
+     *
+     * @param string $name The setting name.
+     * @return int One of {@see default_states()}.
+     */
+    private static function read_default(string $name): int {
+        $value = get_config('local_unlistedcourses', $name);
+        if ($value === false || !is_numeric($value)) {
+            return self::STATE_DEFAULT;
+        }
+        $value = (int) $value;
+        return in_array($value, self::default_states(), true) ? $value : self::STATE_DEFAULT;
     }
 
     /**

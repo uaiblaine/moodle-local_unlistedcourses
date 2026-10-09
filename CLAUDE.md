@@ -10,7 +10,8 @@ listed, unlisted, or public (served to visitors who are not logged in, under
 tables (`local_unlistedcourses_state`, `local_unlistedcourses_catstate`, a row only for
 non-default states), **three capabilities** (`local/unlistedcourses:publish`,
 `local/unlistedcourses:managecategorystate`, `local/unlistedcourses:publishcategory`), two
-events, no settings, one page
+events, two settings (the default state of a new course and of a course restored from a
+backup without one, listed or unlisted, never public), one page
 (`category.php`, the category's editing surface, with one template for its preview). **The
 component name is narrower than its scope** — it was born as "unlisted courses" and now
 owns "public" and categories too; renaming a component means uninstall + reinstall, so the
@@ -146,6 +147,16 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   follows core's rule for `visible`, with one difference: a template restore keeps a `visible`
   column given in the CSV over the template's, and no CSV column does the same for this state. Course
   duplicate (`MODE_SAMESITE`, new course) carries it too.
+- **The two defaults ride on seams core already calls; neither has a hook of its own.** Creation:
+  `create_course()` dispatches `after_form_submission` with `isnewcourse = true`
+  (`course/lib.php:1902-1904` on 5.2), `update_course()` without it, so `courseform::save()` gives a
+  new course without the element `defaultstate` and leaves an update alone; a form value always
+  wins because it is the same call. Restore: core inserts the course row itself, so no creation
+  hook fires; `after_execute_course()` runs after course.xml is parsed whether or not the element
+  was in it (`restore_structure_step::execute()` -> `launch_after_execute_methods()`), and
+  `process_local_unlistedcourses_state()` records that it ran. Only an absent element on
+  `TARGET_NEW_COURSE` gets `restoredefaultstate`. A `tool_uploadcourse` template restore is
+  `create_course()` then `TARGET_CURRENT_ADDING`, so it gets the creation default.
 - **On a new course the form asks what the creator WILL hold**, through core's own
   `guess_if_creator_will_have_course_capability()` (the call behind the core visibility
   select): the category context is all there is, the creator's role in the course does not

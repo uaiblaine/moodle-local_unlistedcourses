@@ -33,6 +33,8 @@ $string['categorystate_help'] = 'Quem pode saber que esta categoria existe.
 
 Isto é uma regra de listagem, não uma permissão. Esconde a categoria das páginas que este site renderiza; serviços web, o aplicativo móvel, o bloco de Navegação e os menus inteligentes de lista de cursos continuam nomeando-a, e um link direto para um curso continua seguindo as regras do próprio curso. Coortes criadas no nível do site não contam, e a coorte à qual um método de inscrição restringe as inscrições também não: só uma coorte definida nesta categoria, ou um papel atribuído aqui, abre a categoria.';
 $string['categorystate_saved'] = 'Descobribilidade da categoria salva';
+$string['defaultstate'] = 'Descobribilidade padrão de cursos novos';
+$string['defaultstate_desc'] = 'A descobribilidade que um curso novo recebe quando quem o cria não escolhe uma. É o valor inicial do campo Descobribilidade no formulário do curso e o estado dado a um curso criado por serviço web, por envio de CSV, pela aprovação de um pedido de curso ou por qualquer outro caminho que não preencha esse campo. O valor escolhido no formulário do curso sempre prevalece. Público não está entre as opções: publicar um curso exige a permissão de publicar cursos de quem o cria. Uma alteração vale só para os cursos criados depois dela.';
 $string['event_category_state_updated'] = 'Estado de descobribilidade da categoria de curso atualizado';
 $string['event_course_state_updated'] = 'Estado de descobribilidade do curso atualizado';
 $string['pluginname'] = 'Descobribilidade de cursos';
@@ -64,6 +66,8 @@ $string['privacy:metadata:local_unlistedcourses_state:timemodified'] = 'Quando o
 $string['privacy:metadata:local_unlistedcourses_state:usermodified'] = 'O usuário que alterou o estado pela última vez.';
 $string['restore_publicclamped'] = 'O curso era público no backup, mas quem o está restaurando não pode publicar cursos aqui. O estado público não foi aplicado.';
 $string['restore_statenotapplied'] = 'O estado de descobribilidade do backup não foi aplicado: quem o está restaurando não pode alterar o estado do curso de destino.';
+$string['restoredefaultstate'] = 'Descobribilidade de curso restaurado de backup sem esse dado';
+$string['restoredefaultstate_desc'] = 'A descobribilidade que um curso recebe quando um backup é restaurado como curso novo e não traz descobribilidade, como acontece com um backup feito em um site sem este plugin. Um backup cujo valor esta versão aplica o mantém; um cujo valor é desconhecido aqui, ou é público e foi recusado a quem restaura, também recebe o padrão. Uma restauração em um curso existente deixa o estado desse curso como está. Um curso criado por envio de CSV a partir de um backup modelo é criado antes da restauração, por isso recebe o padrão de cursos novos.';
 $string['state'] = 'Descobribilidade';
 $string['state_default'] = 'Listado';
 $string['state_help'] = 'Quem pode saber que este curso existe.
