@@ -401,4 +401,240 @@ final class backup_restore_test extends \advanced_testcase {
         $this->assertTrue(discoverability::is_unlisted((int) $copy['id']));
         $this->assertNotSame((int) $course->id, (int) $copy['id']);
     }
+
+    /**
+     * Back a course up, then remove this plugin's element, as a site without the plugin would have written it.
+     *
+     * @param \stdClass $course The course to back up.
+     * @return string The backup id.
+     */
+    private function backup_without_element(\stdClass $course): string {
+        global $CFG;
+
+        $backupid = $this->backup_course($course);
+        $file = $CFG->backuptempdir . '/' . $backupid . '/course/course.xml';
+        $xml = preg_replace(
+            '#<plugin_local_unlistedcourses_course>.*?</plugin_local_unlistedcourses_course>#s',
+            '',
+            file_get_contents($file),
+            -1,
+            $count
+        );
+        $this->assertSame(1, $count, 'Precondition: the backup carried the element before it was removed.');
+        $this->assertStringNotContainsString('plugin_local_unlistedcourses', $xml);
+        file_put_contents($file, $xml);
+        return $backupid;
+    }
+
+    /**
+     * Restore a backup as a new course in the source's category, as admin.
+     *
+     * @param string $backupid The backup to restore.
+     * @param \stdClass $source The course the backup was taken of.
+     * @param string $suffix Keeps the new short name unique.
+     * @return int The new course id.
+     */
+    private function restore_as_new(string $backupid, \stdClass $source, string $suffix): int {
+        $newcourseid = \restore_dbops::create_new_course($source->fullname, $source->shortname . '_' . $suffix, $source->category);
+        $this->restore_backup($backupid, $newcourseid, (int) get_admin()->id, \backup::TARGET_NEW_COURSE, true);
+        return $newcourseid;
+    }
+
+    /**
+     * Restore a backup without the element over an existing course, as admin.
+     *
+     * @param \stdClass $source The course to back up.
+     * @param int $targetid The existing target course id.
+     * @param bool $overwrite Whether to overwrite the target's course configuration.
+     * @return void
+     */
+    private function restore_stripped_over(\stdClass $source, int $targetid, bool $overwrite): void {
+        $backupid = $this->backup_without_element($source);
+        $this->restore_backup($backupid, $targetid, (int) get_admin()->id, \backup::TARGET_EXISTING_ADDING, $overwrite);
+    }
+
+    /**
+     * A new course restored from a backup without the element receives the restore default, not the creation one.
+     *
+     * @return void
+     */
+    public function test_a_new_course_from_a_backup_without_the_element_gets_the_restore_default(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $course = $this->getDataGenerator()->create_course();
+        $this->setAdminUser();
+
+        // Never set: listed, as before the setting existed.
+        $unset = $this->restore_as_new($this->backup_without_element($course), $course, 'unset');
+        $this->assertFalse($DB->record_exists(discoverability::TABLE, ['courseid' => $unset]));
+
+        set_config(discoverability::SETTING_RESTORE_DEFAULT, discoverability::STATE_UNLISTED, 'local_unlistedcourses');
+        $unlisted = $this->restore_as_new($this->backup_without_element($course), $course, 'unlisted');
+        $this->assertTrue(discoverability::is_unlisted($unlisted), 'The restore default must reach the new course.');
+        $this->assertSame(
+            (int) get_admin()->id,
+            (int) $DB->get_field(discoverability::TABLE, 'usermodified', ['courseid' => $unlisted])
+        );
+
+        // The creation default is a different setting: a restore never reads it.
+        set_config(discoverability::SETTING_RESTORE_DEFAULT, discoverability::STATE_DEFAULT, 'local_unlistedcourses');
+        set_config(discoverability::SETTING_DEFAULT, discoverability::STATE_UNLISTED, 'local_unlistedcourses');
+        $listed = $this->restore_as_new($this->backup_without_element($course), $course, 'listed');
+        $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_state($listed));
+        $this->assertFalse($DB->record_exists(discoverability::TABLE, ['courseid' => $listed]));
+    }
+
+    /**
+     * A backup that carries a value keeps it: the restore default applies only to an absent element.
+     *
+     * @return void
+     */
+    public function test_a_backup_with_a_value_keeps_it_over_the_restore_default(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $course = $this->getDataGenerator()->create_course();
+        $this->setAdminUser();
+        set_config(discoverability::SETTING_RESTORE_DEFAULT, discoverability::STATE_UNLISTED, 'local_unlistedcourses');
+
+        // The listed course's backup carries <state>0</state>, which is a value.
+        $listed = $this->restore_as_new($this->backup_course($course), $course, 'carried');
+        $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_state($listed));
+        $this->assertFalse($DB->record_exists(discoverability::TABLE, ['courseid' => $listed]));
+
+        // Control: the same course without the element gets the default.
+        $stripped = $this->restore_as_new($this->backup_without_element($course), $course, 'stripped');
+        $this->assertTrue(discoverability::is_unlisted($stripped));
+    }
+
+    /**
+     * A restore into an existing course never applies the restore default, with or without overwriting configuration.
+     *
+     * @return void
+     */
+    public function test_a_restore_into_an_existing_course_never_gets_the_restore_default(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $source = $generator->create_course();
+        $target = $generator->create_course(['category' => $source->category]);
+        $this->setAdminUser();
+        set_config(discoverability::SETTING_RESTORE_DEFAULT, discoverability::STATE_UNLISTED, 'local_unlistedcourses');
+
+        // With configuration overwritten core runs the course step, and with it this plugin's after_execute_course().
+        $this->restore_stripped_over($source, (int) $target->id, true);
+        $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_state((int) $target->id));
+
+        $this->restore_stripped_over($source, (int) $target->id, false);
+        $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_state((int) $target->id));
+
+        // An unlisted target stays unlisted too: the default is not a reset either way.
+        set_config(discoverability::SETTING_RESTORE_DEFAULT, discoverability::STATE_DEFAULT, 'local_unlistedcourses');
+        discoverability::set_state((int) $target->id, discoverability::STATE_UNLISTED);
+        $this->restore_stripped_over($source, (int) $target->id, true);
+        $this->assertTrue(discoverability::is_unlisted((int) $target->id));
+
+        // Control: the same backup restored as a new course does get the default.
+        set_config(discoverability::SETTING_RESTORE_DEFAULT, discoverability::STATE_UNLISTED, 'local_unlistedcourses');
+        $newcourseid = $this->restore_as_new($this->backup_without_element($source), $source, 'new');
+        $this->assertTrue(discoverability::is_unlisted($newcourseid));
+    }
+
+    /**
+     * Back a course up, then rewrite the value of this plugin's state element in course.xml.
+     *
+     * @param \stdClass $course The course to back up.
+     * @param int $from The value the backup carries.
+     * @param int $to The value to write instead; equal to $from leaves the file as it was.
+     * @return string The backup id.
+     */
+    private function backup_with_state_value(\stdClass $course, int $from, int $to): string {
+        global $CFG;
+
+        $backupid = $this->backup_course($course);
+        $file = $CFG->backuptempdir . '/' . $backupid . '/course/course.xml';
+        $xml = file_get_contents($file);
+        $this->assertStringContainsString('<state>' . $from . '</state>', $xml, 'Precondition: the element carries the value.');
+        file_put_contents($file, str_replace('<state>' . $from . '</state>', '<state>' . $to . '</state>', $xml));
+        return $backupid;
+    }
+
+    /**
+     * Restore a backup as a new course as the given user.
+     *
+     * @param string $backupid The backup to restore.
+     * @param \stdClass $source The course the backup was taken of.
+     * @param int $userid The user performing the restore.
+     * @param string $suffix Keeps the new short name unique.
+     * @return int The new course id.
+     */
+    private function restore_as_new_by(string $backupid, \stdClass $source, int $userid, string $suffix): int {
+        $newcourseid = \restore_dbops::create_new_course($source->fullname, $source->shortname . '_' . $suffix, $source->category);
+        $this->restore_backup($backupid, $newcourseid, $userid, \backup::TARGET_NEW_COURSE, true);
+        return $newcourseid;
+    }
+
+    /**
+     * A value this version does not know falls through to the restore default, not to listed.
+     *
+     * @return void
+     */
+    public function test_an_unknown_state_in_a_backup_gets_the_restore_default(): void {
+        $this->resetAfterTest();
+        $course = $this->getDataGenerator()->create_course();
+        $this->setAdminUser();
+        discoverability::set_state((int) $course->id, discoverability::STATE_UNLISTED);
+        set_config(discoverability::SETTING_RESTORE_DEFAULT, discoverability::STATE_UNLISTED, 'local_unlistedcourses');
+
+        $backupid = $this->backup_with_state_value($course, discoverability::STATE_UNLISTED, 9);
+        $new = $this->restore_as_new_by($backupid, $course, (int) get_admin()->id, 'unknown');
+        $this->assertTrue(discoverability::is_unlisted($new), 'An unapplied value must not suppress the default.');
+    }
+
+    /**
+     * A public value refused to the restorer falls through to the restore default; a publisher keeps it.
+     *
+     * @return void
+     */
+    public function test_a_refused_public_state_gets_the_restore_default(): void {
+        $this->resetAfterTest();
+        $course = $this->getDataGenerator()->create_course();
+        $manager = $this->create_manager($course);
+        $teacher = $this->create_category_teacher($course);
+        $this->setUser($manager);
+        discoverability::set_state((int) $course->id, discoverability::STATE_PUBLIC);
+        set_config(discoverability::SETTING_RESTORE_DEFAULT, discoverability::STATE_UNLISTED, 'local_unlistedcourses');
+
+        $this->setUser($teacher);
+        $refused = $this->restore_as_new_by($this->backup_course($course), $course, (int) $teacher->id, 'refused');
+        $this->assertTrue(discoverability::is_unlisted($refused), 'The refused public must end at the default.');
+        $this->assertStringContainsString(
+            get_string('restore_publicclamped', 'local_unlistedcourses'),
+            $this->restore_log(),
+            'The refusal must still be logged.'
+        );
+
+        // Control: a restorer who may publish keeps the public state over the default.
+        $this->setUser($manager);
+        $kept = $this->restore_as_new_by($this->backup_course($course), $course, (int) $manager->id, 'publisher');
+        $this->assertTrue(discoverability::is_public($kept));
+    }
+
+    /**
+     * Control: a listed state the backup carries explicitly is an applied value and wins over the default.
+     *
+     * @return void
+     */
+    public function test_an_explicit_listed_state_wins_over_the_restore_default(): void {
+        $this->resetAfterTest();
+        $course = $this->getDataGenerator()->create_course();
+        $this->setAdminUser();
+        discoverability::set_state((int) $course->id, discoverability::STATE_UNLISTED);
+        set_config(discoverability::SETTING_RESTORE_DEFAULT, discoverability::STATE_UNLISTED, 'local_unlistedcourses');
+
+        $backupid = $this->backup_with_state_value($course, discoverability::STATE_UNLISTED, discoverability::STATE_DEFAULT);
+        $new = $this->restore_as_new_by($backupid, $course, (int) get_admin()->id, 'listed');
+        $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_state($new));
+        $this->assertFalse(discoverability::is_unlisted($new), 'An applied value must win over the default.');
+    }
 }

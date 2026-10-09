@@ -6,15 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-Version `2026100503`, `MATURITY_STABLE`: the Moodle 5.3 branch (`MOODLE_503_STABLE`), numbered in
+Version `2026100504`, `MATURITY_STABLE`: the Moodle 5.3 branch (`MOODLE_503_STABLE`), numbered in
 the 5.3 namespace (`20261005XX`, the core version 5.3.0 shipped with). It is the 5.2 code with its
 own `version.php`, the single CI job against core `MOODLE_503_STABLE` and the README compatibility
 line. The asynchronous-deletion gap that kept it alpha is closed by the course-deletion change
-below, and a test that runs the real asynchronous path pins it. The relationship, allow-list and
-next-action entries below are `2026100503`, the enrolment fixes and the new routes `2026100502`,
-and the rest was `2026100501`.
+below, and a test that runs the real asynchronous path pins it. The two default-discoverability
+settings are `2026100504`; the relationship, allow-list and next-action entries below are
+`2026100503`, the enrolment fixes and the new routes `2026100502`, and the rest was `2026100501`.
 
 ### Added
+
+- **Default discoverability for new courses** (`local_unlistedcourses/defaultstate`, listed or
+  unlisted, default listed). A course created without the Discoverability field - through
+  `core_course_create_courses`, `tool_uploadcourse`, an approved course request or `create_course()`
+  from code - receives it, and the course form starts at it for a new course. A value chosen on
+  the form always wins, and an update never applies it: `create_course()` dispatches the same
+  `after_form_submission` hook as `update_course()`, and the hook's `isnewcourse` flag tells them
+  apart. Public is not a choice, because a creator without `local/unlistedcourses:publish` would be
+  refused.
+- **Discoverability of a restored course whose backup has none**
+  (`local_unlistedcourses/restoredefaultstate`, listed or unlisted, default listed). Applied only
+  when a backup without this plugin's element - one taken on a site without the plugin - is
+  restored as a new course, from the restore plugin's `after_execute_course()`. A backup whose
+  value is applied keeps it (an unknown value, or a public one refused to the restorer, gets the
+  default, which is never public), and a restore into an existing course never receives it.
+- A settings page for the plugin, under *Site administration > Plugins > Local plugins*.
 
 - **Three more relationships: waitlisted, suspended and expired.** `access::classify_enrolment()`
   now tells an `enrol_apply` waiting-list row (status 2) that has not ended (`waitlisted`) from a
