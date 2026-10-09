@@ -31,7 +31,10 @@ for a non-default state, each recording `usermodified`.
 ## Surfaces
 
 - **No web service of its own** (no `db/services.php`), no scheduled or adhoc task, no
-  observer, no settings and no file serving.
+  observer and no file serving. Two admin settings, `defaultstate` and `restoredefaultstate`:
+  the state a course created without the form's element, or restored as a new course from a
+  backup without one, receives. Each is listed or unlisted, never public, and is applied
+  through `set_state()`.
 - One page script, `category.php`: `require_login()`, then `core_course_category::get($id,
   MUST_EXIST)`, then `require_capability(managecategorystate)`; its form saves through
   `category_discoverability::set_state()`. A settings-navigation node leads to it for holders
