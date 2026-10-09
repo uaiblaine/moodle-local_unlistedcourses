@@ -190,7 +190,10 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   the same rules from at most four bulk statements and drops what SQL cannot read (the self
   enrolment capability, autoenrol's rule), so it errs towards open by design. Wiring the batch
   into `eligible()` or `filter_courses()` would name unlisted courses to people the plugins
-  refuse. Its statement-count and parity tests are in `next_action_test`.
+  refuse. Its statement-count and parity tests are in `next_action_test`. **The opening date
+  (`opens`) errs the other way, towards null**, because a card prints it as a promise: the batch
+  checks the self enrolment capability (course contexts preloaded by its first statement) and
+  never dates an autoenrol instance with a rule.
 - **`can_enrol()` evaluates without reasons** (`evaluate_next_action($courseid, false)`): a
   listing probes unrelated unlisted courses, every one refused by something, and must not pay
   statements to explain refusals nobody reads. `test_the_listing_does_not_pay_for_the_reason_of_a_refusal`
