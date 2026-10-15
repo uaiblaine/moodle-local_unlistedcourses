@@ -1,0 +1,347 @@
+<?php
+// This file is part of Moodle - http://moodle.org/
+//
+// Moodle is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Moodle is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
+
+/**
+ * Course category discoverability - Who still sees an unlisted category
+ *
+ * @package    local_unlistedcourses
+ * @copyright  2026 Anderson Blaine
+ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ */
+
+namespace local_unlistedcourses\output;
+
+use local_unlistedcourses\category_discoverability;
+
+/**
+ * The preview beside the state control: who will still discover this category.
+ *
+ * The three terms that open an unlisted category - a cohort at the category, a
+ * role here or above, staff - are spread across cohort administration, role
+ * assignment and role definitions, so no core page answers "and who does
+ * unlisting leave?". This panel answers it where the decision is made.
+ *
+ * It counts the same things {@see \local_unlistedcourses\category_access} reads,
+ * and must keep agreeing with it: cohorts whose context is this category's own
+ * (never an ancestor's, never the system one), and role holders at this category
+ * or at a category above it. Staff are deliberately outside the count - every
+ * manager and course creator of the site would otherwise swamp it - which is why
+ * the strings say "besides staff".
+ *
+ * The quantifier is the predicate's. When a category above this one is unlisted
+ * too, a user must satisfy that one as well, so the count is the intersection of
+ * the eligible sets, not this category's own set. A headline that ignored the
+ * ancestor would report people who cannot see the category, and would miss the
+ * "visible to nobody" warning exactly when nobody is the true answer.
+ *
+ * A public category gets a different panel and no accounting. The cohort and
+ * role terms answer "who still sees this while it is unlisted", and a public
+ * category is shown to everybody, visitors included, so the counts would answer
+ * a question nobody asked, at two statements per unlisted ancestor. What an
+ * administrator needs there instead is what a visitor will be served, and the
+ * two arrangements that make the public state inert: an unlisted category above
+ * it, or a hidden category anywhere on its path.
+ *
+ * Two gates are independent here. Whether the viewer may read cohort names is
+ * moodle/cohort:view; whether the category is visible to anybody is a fact about
+ * the site. So a viewer without that capability sees the counts but no names,
+ * and the "visible to nobody" warning is computed from the counts, never from
+ * the list of names they may not read.
+ *
+ * @package    local_unlistedcourses
+ * @copyright  2026 Anderson Blaine
+ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ */
+class category_preview implements \renderable, \templatable {
+    /** @var int Most cohorts named at once; past it the template says how many are left. */
+    public const PERPAGE = 100;
+
+    /** @var \core_course_category The category being previewed. */
+    private \core_course_category $category;
+
+    /** @var \core\context\coursecat The category's own context. */
+    private \core\context\coursecat $context;
+
+    /**
+     * Build the preview of one category.
+     *
+     * @param \core_course_category $category The category being edited.
+     * @param \core\context\coursecat $context Its own context.
+     */
+    public function __construct(\core_course_category $category, \core\context\coursecat $context) {
+        $this->category = $category;
+        $this->context = $context;
+    }
+
+    /**
+     * Everything the template names.
+     *
+     * @param \renderer_base $output The renderer.
+     * @return array The template context.
+     */
+    public function export_for_template(\renderer_base $output): array {
+        global $CFG;
+
+        require_once($CFG->dirroot . '/cohort/lib.php');
+
+        $categoryid = (int) $this->category->id;
+        $pathids = $this->path_ids();
+        $ancestors = array_values(array_diff($pathids, [$categoryid]));
+        $state = category_discoverability::get_state($categoryid);
+        $unlisted = $state === category_discoverability::STATE_UNLISTED;
+        $unlistedancestors = array_values(array_intersect($ancestors, category_discoverability::unlisted_ids()));
+
+        if ($state === category_discoverability::STATE_PUBLIC) {
+            return $this->public_context($state, $pathids, $unlistedancestors);
+        }
+
+        $cohortsviewable = has_capability('moodle/cohort:view', $this->context);
+        $cohorts = [];
+        $cohortsmore = 0;
+        if ($cohortsviewable) {
+            $listing = cohort_get_cohorts($this->context->id, 0, self::PERPAGE);
+            $counts = self::member_counts(array_keys($listing['cohorts']));
+            foreach ($listing['cohorts'] as $cohort) {
+                $cohorts[] = [
+                    // Plain spelling: the template puts the name in a double stash.
+                    'name' => format_string($cohort->name, true, ['context' => $this->context, 'escape' => false]),
+                    'members' => (int) ($counts[(int) $cohort->id] ?? 0),
+                ];
+            }
+            $cohortsmore = max(0, (int) $listing['totalcohorts'] - count($cohorts));
+        }
+
+        /* Counted over every cohort at this category, not over the page of them the
+           template names: the count answers "is anybody left", which must not change
+           with a listing limit or with who is reading it. */
+        $cohortusers = self::cohort_members($this->context->id);
+        $roleusers = self::role_holders($pathids);
+        $eligible = array_unique(array_merge($cohortusers, $roleusers));
+
+        /* AND over the unlisted categories above this one, as category_access::answers()
+           does (see the class docblock). Two more statements per unlisted ancestor, a
+           price only this page pays. */
+        foreach ($unlistedancestors as $ancestorid) {
+            $eligible = array_intersect($eligible, self::eligible_users($ancestorid, $pathids));
+        }
+        $visiblecount = count($eligible);
+
+        return [
+            'state' => $state,
+            'unlisted' => $unlisted,
+            'public' => false,
+            'publicancestorunlisted' => false,
+            'publichidden' => false,
+            'ancestorunlisted' => (bool) $unlistedancestors,
+            'cohortsviewable' => $cohortsviewable,
+            'cohorts' => $cohorts,
+            'hascohorts' => (bool) $cohorts,
+            'cohortsmore' => $cohortsmore,
+            'cohortsurl' => (new \moodle_url('/cohort/index.php', ['contextid' => $this->context->id]))->out(false),
+            'roleholders' => count($roleusers),
+            'visiblecount' => $visiblecount,
+            'nobodywarning' => $unlisted && $visiblecount === 0,
+            'themewarning' => self::theme_warning(),
+        ];
+    }
+
+    /**
+     * Whether this site lets a category carry a theme of its own.
+     *
+     * Read by both branches from this one place, so they cannot disagree about a
+     * fact of the site: a theme set on a category switches its pages away from
+     * the theme that applies this plugin's listing rules, which matters for
+     * a public category as much as for an unlisted one.
+     *
+     * @return bool True when category themes are enabled.
+     */
+    private static function theme_warning(): bool {
+        global $CFG;
+
+        return !empty($CFG->allowcategorythemes);
+    }
+
+    /**
+     * Everything the template names, for a category in the public state.
+     *
+     * The same keys as the unlisted branch, because one template reads both,
+     * with the accounting empty: see the class docblock for why it is not
+     * computed rather than computed and hidden.
+     *
+     * 'ancestorunlisted' keeps its true value here although the template renders
+     * it only in the non-public branch (the public panel says the same thing
+     * through 'publicancestorunlisted'), so the key never contradicts its name if
+     * a later template reads it in both branches.
+     *
+     * @param int $state The stored state, which is the public one here.
+     * @param array $pathids This category's own id and every ancestor's.
+     * @param array $unlistedancestors The ids of the unlisted categories above this one.
+     * @return array The template context.
+     */
+    private function public_context(int $state, array $pathids, array $unlistedancestors): array {
+        return [
+            'state' => $state,
+            'unlisted' => false,
+            'public' => true,
+            'publicancestorunlisted' => (bool) $unlistedancestors,
+            'publichidden' => self::path_has_hidden($pathids),
+            'ancestorunlisted' => (bool) $unlistedancestors,
+            'cohortsviewable' => false,
+            'cohorts' => [],
+            'hascohorts' => false,
+            'cohortsmore' => 0,
+            'cohortsurl' => (new \moodle_url('/cohort/index.php', ['contextid' => $this->context->id]))->out(false),
+            'roleholders' => 0,
+            'visiblecount' => 0,
+            'nobodywarning' => false,
+            'themewarning' => self::theme_warning(),
+        ];
+    }
+
+    /**
+     * Whether this category or any category above it is hidden.
+     *
+     * The visibility half of the public composition, read here so the panel can
+     * name the reason rather than just saying "not public": a hidden category is
+     * never public, and neither is one inside a hidden category.
+     *
+     * @param array $pathids This category's own id and every ancestor's.
+     * @return bool True when at least one of them is hidden.
+     */
+    private static function path_has_hidden(array $pathids): bool {
+        global $DB;
+
+        if (!$pathids) {
+            return true;
+        }
+        [$insql, $params] = $DB->get_in_or_equal($pathids, SQL_PARAMS_NAMED, 'cat');
+        $visiblecount = $DB->count_records_select('course_categories', "id $insql AND visible = 1", $params);
+        return $visiblecount !== count($pathids);
+    }
+
+    /**
+     * The users one effectively-unlisted category on the path leaves it open to.
+     *
+     * Its own two terms, spelled the way category_access spells them: a cohort whose
+     * context is that category's, and a role at it or at a category above it - which is
+     * the prefix of this path, never the whole of it. Staff are outside the count here
+     * for the reason the class docblock gives.
+     *
+     * @param int $categoryid An unlisted category on this category's path.
+     * @param array $pathids The ids on this category's path, ancestor first.
+     * @return array The user ids, deduplicated.
+     */
+    private static function eligible_users(int $categoryid, array $pathids): array {
+        $context = \core\context\coursecat::instance($categoryid, IGNORE_MISSING);
+        $cohortusers = $context ? self::cohort_members($context->id) : [];
+        return array_unique(array_merge($cohortusers, self::role_holders(self::prefix_to($pathids, $categoryid))));
+    }
+
+    /**
+     * The prefix of a path up to and including one of its ids.
+     *
+     * @param array $pathids The ids on a path, ancestor first.
+     * @param int $categoryid The id to stop at.
+     * @return array The ids up to and including it, empty when it is not on the path.
+     */
+    private static function prefix_to(array $pathids, int $categoryid): array {
+        $position = array_search($categoryid, $pathids, true);
+        return $position === false ? [] : array_slice($pathids, 0, $position + 1);
+    }
+
+    /**
+     * This category's own id and every ancestor's, ancestor first.
+     *
+     * @return array The ids as ints.
+     */
+    private function path_ids(): array {
+        $ids = array_map('intval', $this->category->get_parents());
+        $ids[] = (int) $this->category->id;
+        return array_values(array_unique($ids));
+    }
+
+    /**
+     * How many members each of these cohorts has, in one query.
+     *
+     * @param array $cohortids The cohort ids being named.
+     * @return array Map of cohortid => member count, missing for a cohort with no members.
+     */
+    private static function member_counts(array $cohortids): array {
+        global $DB;
+
+        if (!$cohortids) {
+            return [];
+        }
+        [$insql, $params] = $DB->get_in_or_equal($cohortids, SQL_PARAMS_NAMED, 'coh');
+        $sql = "SELECT cm.cohortid, COUNT(*) AS membercount
+                  FROM {cohort_members} cm
+                 WHERE cm.cohortid $insql
+              GROUP BY cm.cohortid";
+
+        $counts = [];
+        foreach ($DB->get_records_sql($sql, $params) as $row) {
+            $counts[(int) $row->cohortid] = (int) $row->membercount;
+        }
+        return $counts;
+    }
+
+    /**
+     * The users belonging to a cohort whose context is this one.
+     *
+     * Read straight from the tables for the reason category_access gives: an
+     * invisible cohort still grants, so cohort_get_user_cohorts() and anything
+     * else filtering on visible would undercount.
+     *
+     * @param int $contextid The category's own context id.
+     * @return array The user ids, deduplicated.
+     */
+    private static function cohort_members(int $contextid): array {
+        global $DB;
+
+        $sql = "SELECT DISTINCT cm.userid
+                  FROM {cohort_members} cm
+                  JOIN {cohort} c ON c.id = cm.cohortid
+                 WHERE c.contextid = :contextid";
+        return array_map('intval', $DB->get_fieldset_sql($sql, ['contextid' => $contextid]));
+    }
+
+    /**
+     * The users holding any role at one of these categories.
+     *
+     * The whole path, because a role at a listed ancestor opens an unlisted
+     * descendant - the rule the predicate applies, reproduced here so the two
+     * cannot drift apart. Course and system assignments are not read: neither is
+     * a relationship with this category.
+     *
+     * @param array $categoryids The category ids to read, this one and its ancestors.
+     * @return array The user ids, deduplicated.
+     */
+    private static function role_holders(array $categoryids): array {
+        global $DB;
+
+        if (!$categoryids) {
+            return [];
+        }
+        [$insql, $params] = $DB->get_in_or_equal($categoryids, SQL_PARAMS_NAMED, 'cat');
+        $params['contextlevel'] = CONTEXT_COURSECAT;
+        $sql = "SELECT DISTINCT ra.userid
+                  FROM {role_assignments} ra
+                  JOIN {context} ctx ON ctx.id = ra.contextid
+                 WHERE ctx.contextlevel = :contextlevel
+                   AND ctx.instanceid $insql";
+        return array_map('intval', $DB->get_fieldset_sql($sql, $params));
+    }
+}
