@@ -19,17 +19,15 @@ name stays and the strings talk about discoverability. The technical guide for t
 plugin developers - the model, every predicate's contract, the category semantics, theme
 integration and the surfaces the plugin does not cover - is `docs/developer-guide.md`
 (export-ignored); keep it in step with the code it describes. This checkout is the Moodle
-**5.2** line, branch `MOODLE_502_STABLE` (`$plugin->supported = [502, 502]`); one CI job in
-`.github/workflows/ci.yml` — update it when the range changes. Mounted on m502 and m502b at
-`local/unlistedcourses`. The 5.3 line is `main` (= `MOODLE_503_STABLE`), checked out at
-`~/dev/moodle-local_unlistedcourses-503`.
+**5.3** line (`$plugin->supported = [503, 503]`); one CI job in `.github/workflows/ci.yml` —
+update it when the range changes. Mounted on m503 and m503b at `local/unlistedcourses`.
 
 ```sh
-mdl phpunit m502 local_unlistedcourses
-mdl behat m502 @local_unlistedcourses
-mdl ci moodle-local_unlistedcourses --matrix
-mdl mutate moodle-local_unlistedcourses \
-  /Users/uaiblaine/dev/moodle-local_unlistedcourses/mutations/gates.conf --stack m502
+mdl phpunit m503 local_unlistedcourses
+mdl behat m503 @local_unlistedcourses
+mdl ci moodle-local_unlistedcourses-503 --matrix
+mdl mutate moodle-local_unlistedcourses-503 \
+  /Users/uaiblaine/dev/moodle-local_unlistedcourses-503/mutations/gates.conf --stack m503
 ```
 
 ## Agent orchestration budget (fleet rule, repeated here on purpose)
@@ -61,11 +59,12 @@ definition, and none runs on the session model.
 
 ## Versions
 
-This branch, `MOODLE_502_STABLE`, is the 5.2 line (`supported = [502, 502]`, `MATURITY_STABLE`,
-release `v5.2-r1`), numbered in the 5.2 namespace `20260420XX` from its `$plugin->requires`,
-`2026042000`; every later change that needs a bump adds 1 to that counter. `main` equals
-`MOODLE_503_STABLE`, the 5.3 line in the 5.3 namespace `20261005XX`, and counts on its own;
-a fix lands on `main` and is cherry-picked here, keeping this branch's `version.php`. 4.5 and 5.1 are not supported. Upgrade steps stay inside the namespace of the branch they live on. The earlier
+`main` now equals `MOODLE_503_STABLE`, the 5.3 line (`supported = [503, 503]`,
+`MATURITY_STABLE`, release `v5.3-r1`), numbered in the 5.3 namespace `20261005XX` from its
+`$plugin->requires`, `2026100500`; every later change that needs a bump adds 1 to that counter.
+`MOODLE_502_STABLE` carries 5.2 (`supported = [502, 502]`) in the 5.2 namespace `20260420XX`:
+its first release, `v5.2-r1`, is `2026042000` (its `$plugin->requires`), and it counts on its
+own. 4.5 and 5.1 are not supported. Upgrade steps stay inside the namespace of the branch they live on. The earlier
 date-based numbers (`2026090200` to `2026091301`, releases `v5.2-r3` and `r4`) were never
 published and no longer exist; a stack or site that ran them needs its stored version set back
 before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses --name=version
@@ -150,7 +149,7 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   duplicate (`MODE_SAMESITE`, new course) carries it too.
 - **The two defaults ride on seams core already calls; neither has a hook of its own.** Creation:
   `create_course()` dispatches `after_form_submission` with `isnewcourse = true`
-  (`course/lib.php:1902-1904` on 5.2), `update_course()` without it, so `courseform::save()` gives a
+  (`course/lib.php:1908-1910` on 5.3), `update_course()` without it, so `courseform::save()` gives a
   new course without the element `defaultstate` and leaves an update alone; a form value always
   wins because it is the same call. Restore: core inserts the course row itself, so no creation
   hook fires; `after_execute_course()` runs after course.xml is parsed whether or not the element
@@ -225,9 +224,11 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
 - **`enrol_apply` is absent from a fresh test site's `enrol_plugins_enabled`** —
   `add_apply_enrol()` in `access_test` enables it first.
 - **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds a hundred and
-  four guards, and each must redden a test. The apply, autoenrol and coursecompleted gates need a
-  stack that mounts those plugins (m502, m502b): `mdl ci`, and so `mdl mutate --fast`,
-  installs none of them, skips their tests and reads those gates as held by nothing. Adding a
+  five guards, and each must redden a test. The apply, autoenrol and coursecompleted gates need a
+  stack that mounts those plugins: m503 and m503b mount autoenrol and coursecompleted, and no
+  5.3 stack mounts enrol_apply, whose supported range ends at 5.2. `mdl ci`, and so
+  `mdl mutate --fast`, installs none of them, skips their tests and reads those gates as held
+  by nothing. Adding a
   guard without a mutation is how untested ones get in. The first sweep found one that reddened nothing — the restore clamp above —
   and it turned out to be wrong code, not a missing test.
 - **Restore into an EXISTING course is a different path from restore into a new one**, and
@@ -315,17 +316,8 @@ Pull request reviews by MDL Shield are **manual only**. Comment `!mdlshield revi
 new since the last review) or `!mdlshield review full` (the whole pull request) on a pull
 request; the commands work for the repository owner and the `trusted_users` of
 `.mdlshield/config.yml`, and a forced command ignores the filters and a draft's silence.
-Nothing runs on its own because `include.branches` names a branch no pull request targets
-(a non-empty include list is a requirement; an empty one was measured NOT to stop automatic
-reviews).
-
-- **A review is a counted resource, so ask for one on purpose.** The monthly quota is shared by every
-  repository, and only a completed review uses one. The owner posts the command; a session never
-  does without being told to for that pull request. Keep a pull request at or under **3,000 effective
-  changed lines** (additions plus deletions after `exclude.paths`; the limit is MDL Shield's own
-  and 12,000 is the hard one, forced reviews included): `mdl mdlshield size <repo-dir>` estimates it.
-  One `review full` per pull request, after the local matrix is green. The rule and its reasons are
-  in the fleet CLAUDE.md (section 4, "MDL Shield review budget").
+Nothing runs on its own because `include.branches` is an empty list, which MDL Shield reads
+as a rule that matches no branch.
 
 - `.mdlshield/config.yml` and `.mdlshield/context.md` are read **from the default branch
   only** (`main`), so a pull request cannot change the rules that judge it, and the pull

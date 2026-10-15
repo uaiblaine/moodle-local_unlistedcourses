@@ -4,12 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## v5.2-r1 (2026042005) - 2026-10-15
+## v5.3-r1 (2026100505) - 2026-10-15
 
-Version `2026042005`. The opening-date entry below is `2026042005`, the two default-discoverability
-settings `2026042004`; the relationship, allow-list and next-action entries are `2026042003`; the
-queue rule and the new routes were `2026042002`, and the scheduled-enrolment and course-deletion
-entries `2026042001`.
+Version `2026100505`, `MATURITY_STABLE`: the Moodle 5.3 branch (`MOODLE_503_STABLE`), numbered in
+the 5.3 namespace (`20261005XX`, the core version 5.3.0 shipped with). It is the 5.2 code with its
+own `version.php`, the single CI job against core `MOODLE_503_STABLE` and the README compatibility
+line. The asynchronous-deletion gap that kept it alpha is closed by the course-deletion change
+below, and a test that runs the real asynchronous path pins it. The opening-date entry below is
+`2026100505`, the two default-discoverability settings `2026100504`; the relationship, allow-list
+and next-action entries are `2026100503`, the enrolment fixes and the new routes `2026100502`, and
+the rest was `2026100501`. From this release `main` is the 5.3 line and equals
+`MOODLE_503_STABLE`; the 5.2 line continues on `MOODLE_502_STABLE` with the same code.
 
 ### Documentation
 
