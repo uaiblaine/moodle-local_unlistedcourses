@@ -4,7 +4,8 @@
 [![MDL Shield](https://img.shields.io/endpoint?url=https%3A%2F%2Fmdlshield.com%2Fapi%2Fbadge%2Fpublisher%2Fuaiblaine%2Flocal_unlistedcourses)](https://mdlshield.com/reviews/publisher/uaiblaine/local_unlistedcourses)
 
 Owns one decision per course: **who may learn that this course exists.** Three states,
-stored in the plugin's own table and edited from the course settings form:
+stored in the plugin's own table (`local_unlistedcourses_state`, see [Data stored](#data-stored))
+and edited from the course settings form:
 
 | State | Meaning |
 |---|---|
@@ -30,7 +31,8 @@ data, so the name stays and the user-facing strings talk about discoverability.
   visible and **every category on its path** to be visible, because core's own visibility
   answer ends in a capability check that fails for user id 0 under `forcelogin`. It is a
   property of the course, not of the viewer. `are_public()` is the batched form, four
-  statements for any number of courses, and `is_public()` delegates to it so the two can
+  statements for any number of courses plus the request's memoised read of the unlisted
+  categories, and `is_public()` delegates to it so the two can
   never disagree; a course that is not there answers `false` and throws nothing.
 - `set_state(int $courseid, int $state, ?int $userid = null)` - **the one place the
   publish capability is checked.** Entering or leaving the public state requires
@@ -251,24 +253,68 @@ on a site that forces login), worked examples from `theme_dimensions`, `block_co
 `local_dimensions`, and how to test an integration. The class docblocks in `classes/` remain the
 source of truth.
 
-## Privacy
+## Settings
 
-Both state tables record who last changed a state (`usermodified`). A deletion request
-detaches the user from the row and leaves the state in place: removing the row would
-un-hide or un-publish a course, or un-hide a category, as a side effect of somebody leaving
-the site.
+Under *Site administration > Plugins > Local plugins > Course discoverability*, both stored in
+`config_plugins` and described in [Defaults for new courses](#defaults-for-new-courses):
+
+- `local_unlistedcourses/defaultstate` (default: listed) - the state of a course created without
+  one chosen.
+- `local_unlistedcourses/restoredefaultstate` (default: listed) - the state of a course restored
+  as a new course from a backup that carries none.
+
+Each offers listed or unlisted; public is never a choice.
+
+## Capabilities
+
+| Capability | Context | Default | What it allows |
+|---|---|---|---|
+| `local/unlistedcourses:publish` | course | manager | Making a course public, or taking it out of the public state. `RISK_SPAM` and `RISK_PERSONAL`: the published page carries author-written text to the open web and can name participants. |
+| `local/unlistedcourses:managecategorystate` | category | manager | Changing a category's state at all (listed, unlisted or public). |
+| `local/unlistedcourses:publishcategory` | category | manager | Making a category public, or taking it out of the public state, on top of the previous one. `RISK_SPAM`. |
+
+None of them is cloned from a core capability, so no upgrade back-fills them. Moving a course
+between listed and unlisted needs no capability of this plugin: the select is offered to whoever
+may set course visibility (`moodle/course:visibility`) on a form they may already save.
+
+## Data stored
+
+Two tables, each holding a row only for something in a non-default state:
+
+- `local_unlistedcourses_state` - one row per unlisted or public course: the course, its state,
+  the user who last changed the state (`usermodified`) and when (`timemodified`).
+- `local_unlistedcourses_catstate` - the same for an unlisted or public course category.
+
+A row lives as long as its course or category stays unlisted or public. It is deleted when the
+state returns to listed, when the course is deleted (an observer of
+`\core\event\course_deleted`) or when the category is deleted, and both tables are dropped when
+the plugin is uninstalled. A course backup carries the course's state and nothing about who set
+it. The two settings above are site configuration. Each state change fires an event
+(`course_state_updated`, `category_state_updated`), which the site's log stores keep under their
+own retention and privacy rules. The plugin stores no files and no user preferences.
+
+The only personal data is `usermodified`, and the Privacy API covers it. A data request exports,
+for every course and category whose state the user last changed, that state and the time of the
+change. A deletion request detaches the user from the row (`usermodified` becomes 0) and leaves
+the state in place: removing the row would un-hide or un-publish a course, or un-hide a category,
+as a side effect of somebody leaving the site.
 
 ## Requirements
 
 Moodle 5.2 on this branch (`MOODLE_502_STABLE`, release `v5.2-r1`). Moodle 5.3 is served by `main`,
 identical to `MOODLE_503_STABLE`, release `v5.3-r1`. Moodle 4.5 and 5.1 are not supported.
-Brazilian Portuguese and English language packs.
 
 ## Installation
 
 Copy the plugin to `local/unlistedcourses` in your Moodle directory (`public/local/unlistedcourses`
 on Moodle 5.1 and later), or install the release zip from the Moodle plugins directory, then
 visit *Site administration > Notifications* to run the installation.
+
+## Translations
+
+The English strings ship in the package. The Brazilian Portuguese translation is maintained in this
+repository (`lang/pt_br`) and reaches sites through [AMOS](https://lang.moodle.org/), as the
+plugins directory requires; it is left out of the release package.
 
 ## License
 
