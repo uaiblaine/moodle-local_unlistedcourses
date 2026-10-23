@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased (2026100506)
+## v5.3-r2 (2026100506) - 2026-10-22
 
 Version `2026100506`: the plugins directory's submission guidelines, applied after a directory
 review of a sibling plugin found four defects no CI gate read. No code path of the plugin changed.
