@@ -301,8 +301,8 @@ as a side effect of somebody leaving the site.
 
 ## Requirements
 
-Moodle 5.2 on this branch (`MOODLE_502_STABLE`, release `v5.2-r1`). Moodle 5.3 is served by `main`,
-identical to `MOODLE_503_STABLE`, release `v5.3-r1`. Moodle 4.5 and 5.1 are not supported.
+Moodle 5.2 on this branch (`MOODLE_502_STABLE`, release `v5.2-r2`). Moodle 5.3 is served by `main`,
+identical to `MOODLE_503_STABLE`, release `v5.3-r2`. Moodle 4.5 and 5.1 are not supported.
 
 ## Installation
 

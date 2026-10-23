@@ -62,7 +62,7 @@ definition, and none runs on the session model.
 ## Versions
 
 This branch, `MOODLE_502_STABLE`, is the 5.2 line (`supported = [502, 502]`, `MATURITY_STABLE`,
-release `v5.2-r1`), numbered in the 5.2 namespace `20260420XX` from its `$plugin->requires`,
+release `v5.2-r2`), numbered in the 5.2 namespace `20260420XX` from its `$plugin->requires`,
 `2026042000`; every later change that needs a bump adds 1 to that counter. `main` equals
 `MOODLE_503_STABLE`, the 5.3 line in the 5.3 namespace `20261005XX`, and counts on its own;
 a fix lands on `main` and is cherry-picked here, keeping this branch's `version.php`. 4.5 and 5.1 are not supported. Upgrade steps stay inside the namespace of the branch they live on. The earlier
