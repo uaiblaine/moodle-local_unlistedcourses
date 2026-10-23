@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## v5.2-r2 (2026042006) - 2026-10-22
+
+Version `2026042006`: the plugins directory's submission guidelines, applied after a directory
+review of a sibling plugin found four defects no CI gate read. No code path of the plugin changed.
+
+### Added
+
+- A `LICENSE` file beside `COPYING.txt`, both the GPL v3 text: the plugins directory requires a
+  licence file in the package, and the MAH completeness check still requires `COPYING.txt`.
+- `tests/marketplace_readiness_test.php`, the fleet's file-reading test of the directory
+  requirements: both licence files ship, only English strings ship, language files are data
+  only, the README names every table, capability and dependency, settings are stored as
+  `local_unlistedcourses/<name>`, every source file carries the boilerplate, and core rows
+  stamped with the component are covered by the privacy provider (the plugin stamps none).
+
+### Changed
+
+- `lang/pt_br` is left out of the release package (`export-ignore`). It stays in this repository
+  in step with `lang/en` and reaches sites through AMOS, as the directory accepts only English
+  strings in a package.
+
+### Documentation
+
+- The README names both tables and gains *Settings*, *Capabilities*, *Data stored* and
+  *Translations* sections: what each table keeps, how long, what removes it, and what a data
+  request exports and a deletion does. It no longer claims a Brazilian Portuguese language pack in
+  the package.
+
 ## v5.2-r1 (2026042005) - 2026-10-15
 
 Version `2026042005`. The opening-date entry below is `2026042005`, the two default-discoverability
