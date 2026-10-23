@@ -60,7 +60,7 @@ definition, and none runs on the session model.
 ## Versions
 
 `main` now equals `MOODLE_503_STABLE`, the 5.3 line (`supported = [503, 503]`,
-`MATURITY_STABLE`, release `v5.3-r1`), numbered in the 5.3 namespace `20261005XX` from its
+`MATURITY_STABLE`, release `v5.3-r2`), numbered in the 5.3 namespace `20261005XX` from its
 `$plugin->requires`, `2026100500`; every later change that needs a bump adds 1 to that counter.
 `MOODLE_502_STABLE` carries 5.2 (`supported = [502, 502]`) in the 5.2 namespace `20260420XX`:
 its first release, `v5.2-r1`, is `2026042000` (its `$plugin->requires`), and it counts on its
