@@ -96,11 +96,24 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   `visible` straight to a table must reset the caches before it re-reads.
 - **`access::prime_relationships()` only ever writes TRUE.** A caller that has read the
   viewer's whole `{user_enrolments}` in one statement hands the course ids over and
-  `has_course_relationship()` answers from memory — which is the one part of
-  `filter_courses()` that is not flat (measured: 105 probed courses, 113 statements). The
+  `has_course_relationship()` answers from memory, skipping even the probe's bulk reads. The
   caller is vouching for a relationship it read; it is NOT authoritative about the absence of
   one, because being staff of a course is a relationship too and no enrolment table carries
   it. Viewer-keyed, dropped by `reset_caches()`.
+- **The listing probe is primed in bulk and decided per course.** `access::prime_probe()` reads,
+  for every unlisted or category-withheld course of a listing at once, what the per-course rule
+  would read: contexts with the enabled instances, the viewer's rows, their cohorts, the counts
+  on capped self instances (at most four statements; one for staff, none for a visitor). It only
+  fills memos with what the replaced statement reads from the same rows; the verdict stays in
+  `compute_course_relationship()` and `eligible()`. Staff is asked first (no statement), then the
+  enrolment state, then `is_enrolled()` only when core's `$USER->enrol['enrolled']` memo holds the
+  course: every row `is_enrolled()` counts is one `classify_enrolment()` calls enrolled.
+- **`self_enrol_admits()` copies enrol_self's `can_self_enrol($instance, false)`** and its
+  `is_self_enrol_available()`, check for check, over the primed facts. It is the one place the
+  discoverability rule does not ask the plugin itself. `access_probe_test` holds it to core by a
+  parity test over every check and by a fingerprint of both methods' source: when that reddens
+  on a core update, bring the copy in step before touching the fingerprint, because a check the
+  copy lacks would name an unlisted course to somebody enrol_self refuses.
 - **The capability check lives in `discoverability::set_state()` and nowhere else.** The
   course form is one of four writers — the web service and `tool_uploadcourse` dispatch the
   same `after_form_submission` hook (`create_course()` dispatches it after the course row is
@@ -224,7 +237,7 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
 - **`enrol_apply` is absent from a fresh test site's `enrol_plugins_enabled`** —
   `add_apply_enrol()` in `access_test` enables it first.
 - **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds a hundred and
-  five guards, and each must redden a test. The apply, autoenrol and coursecompleted gates need a
+  thirty-four guards, and each must redden a test. The apply, autoenrol and coursecompleted gates need a
   stack that mounts those plugins: m503 and m503b mount autoenrol and coursecompleted, and no
   5.3 stack mounts enrol_apply, whose supported range ends at 5.2. `mdl ci`, and so
   `mdl mutate --fast`, installs none of them, skips their tests and reads those gates as held
