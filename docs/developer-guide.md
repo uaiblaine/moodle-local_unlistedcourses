@@ -282,12 +282,15 @@ An unlisted course is discoverable by `$USER` when **any** of these holds (`elig
 
 1. **A relationship with the course** (`has_course_relationship()`):
    - the course is the site course (everybody participates on the front page);
-   - an active enrolment, as `is_enrolled($context, $USER, '', true)` reads it;
    - staff: `is_viewing()` (`moodle/course:view`, held by managers) or
-     `moodle/course:viewhiddencourses` (teacher, editing teacher, course creator, manager);
+     `moodle/course:viewhiddencourses` (teacher, editing teacher, course creator, manager). Asked
+     first: it reads the access data loaded once per request, so a manager pays no enrolment read;
    - a relationship from the **allow-list** `enrolled`, `scheduled`, `pending`, `waitlisted`
      (section 2.5). `suspended` and `expired` keep nothing by themselves; a relationship type added
-     later stays out until it is put on the list on purpose.
+     later stays out until it is put on the list on purpose;
+   - an active enrolment, as `is_enrolled($context, $USER, '', true)` reads it. Every row it counts
+     is one the allow-list already keeps as `enrolled`, so it is asked only when core's own memo
+     (`$USER->enrol['enrolled']`) holds the course, the one answer it can add.
 2. **Could join right now**: the next action (section 2.6) is `open`, `guest` or `conditional`,
    evaluated per course by asking each enrol plugin, without working out refusal reasons.
 
@@ -299,10 +302,20 @@ the same answer core's own enrolment icons give.
 
 #### 2.3.2 Cost, and `prime_relationships()`
 
-The stored states cost one statement per request. Eligibility is the expensive half - relationship
-queries, `enrol_get_instances()` and the per-instance checks, none cached by core - and runs only for
-unlisted courses, at roughly one or more statements per course probed. It is the one part of a
-listing that is not flat.
+The stored states cost one statement per request. Eligibility is the expensive half - the enrolment
+rows, `enrol_get_instances()` and the per-instance checks, none cached by core - and runs only for
+unlisted courses and, in `filter_courses()`, for courses an unlisted category withholds. Before the
+rule runs, `prime_probe()` reads what it would read course by course, for all of them at once, in at
+most four statements: the course contexts with every enabled instance (the rows of
+`enrol_get_instances($courseid, true)`, in its order and with its filter), every row the viewer
+holds, the viewer's cohorts (only when a self enrolment instance restricts by one) and one grouped
+count of the rows on every capped self enrolment instance. Staff skip the last three, and a course
+the enrolment state keeps skips the last two. The rule then decides every course from those memos,
+in the same order and by the same terms; enrol_self's `can_self_enrol($instance, false)` is answered
+by `self_enrol_admits()`, a check-for-check copy of it and `is_self_enrol_available()` over the same
+facts, held to the core methods by a parity test over every check and a fingerprint of their source
+(`tests/access_probe_test.php`). The other enrol methods are still asked per instance, as their own
+rules read; a listing whose unlisted courses use them pays those plugins' statements.
 
 A caller that has already read the viewer's whole `{user_enrolments}` in one statement knows the
 answer for those courses. `prime_relationships()` hands it over: it writes **true** into the
@@ -315,7 +328,8 @@ the category term. Rules:
 - **Prime before you ask.** It does not clear answers already memoised for the request.
 - `$pending` includes waiting-list rows. Keyed by the viewer; `reset_caches()` drops it.
 
-`tests/access_test.php` holds that a primed course answers without the enrolment statements.
+`tests/access_test.php` holds that a primed course answers without the enrolment statements, and
+`tests/access_probe_test.php` that a listing costs the same for 2 unlisted courses and for 200.
 
 ### 2.4 Anonymous predicates
 
@@ -501,8 +515,8 @@ Two rules follow:
 | `discoverability::are_public()` / `is_public()` | none | course | 4 + `unlisted_ids()` |
 | `category_discoverability::are_public()` / `is_public()` | none | category | 4 including `unlisted_ids()` |
 | `access::filter_courses_public()` | none | course | as `are_public()` |
-| `access::are_courses_discoverable()` / `is_course_discoverable()` | `$USER` | viewer:course | 1 for states + eligibility per unlisted course |
-| `access::filter_courses()` | `$USER` | viewer:course | the above + the category predicate + relationship probes for courses under an unlisted category |
+| `access::are_courses_discoverable()` / `is_course_discoverable()` | `$USER` | viewer:course | 1 for states + at most 4 for the probe of the unlisted ones (1 for staff, 0 for a visitor); plus what enrol methods other than self, guest and manual ask per instance |
+| `access::filter_courses()` | `$USER` | viewer:course | the above, with the courses under an unlisted category in the same probe, + the category predicate |
 | `category_access::are_categories_discoverable()` / `filter_categories()` | `$USER` | viewer:category | at most 4 per request; 1 when nothing is unlisted |
 | `access::get_enrolment_state()` | `$USER` | viewer:course | 1 per course |
 | `access::get_next_action()` | `$USER` | viewer:course | statements per instance |
@@ -898,6 +912,7 @@ not carry a `MOODLE_INTERNAL` guard.
 | Test | Holds |
 |---|---|
 | `tests/access_test.php` | the course rule, the category term, `filter_courses_public()`, `prime_relationships()`, viewer-keyed memos |
+| `tests/access_probe_test.php` | the listing probe's statement budget, its verdicts for every viewer kind, the self enrolment copy against enrol_self |
 | `tests/next_action_test.php` | the relationship vocabulary, the next action per method, batch parity, `opens`, statement counts |
 | `tests/category_access_test.php` | the three terms, AND over the path, the fast path |
 | `tests/discoverability_test.php`, `tests/category_discoverability_test.php` | the gates, the public composition and its budget, unknown stored values, `state_sql()` |

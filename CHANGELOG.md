@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Changed
+
+- A listing's discoverability probe reads in bulk. `access::filter_courses()` and
+  `are_courses_discoverable()` read, for every unlisted or category-withheld course at once, the
+  contexts with the enabled enrol instances, the viewer's enrolment rows, their cohorts and the
+  counts on capped self enrolment instances: at most four statements for any number of courses,
+  where the per-course probe paid about four per course. Measured on a 5,000-course catalogue's
+  root (Moodle 5.3): 141 statements to 35 for a student, 95 to 37 for a manager. No verdict changed; the rule
+  still decides each course in the same order and by the same terms.
+- Staff of a course are recognised before any enrolment read, so a manager's probe costs one
+  statement. `is_enrolled()` is asked only when core's own enrolment memo holds the course, the
+  one answer it can add to the enrolment state.
+- Self enrolment is judged by a check-for-check copy of `enrol_self`'s `can_self_enrol()` over
+  the facts read in bulk; a parity test over every check and a fingerprint of the two core
+  methods hold the copy to core.
+
 ## v5.2-r2 (2026042006) - 2026-10-22
 
 Version `2026042006`: the plugins directory's submission guidelines, applied after a directory

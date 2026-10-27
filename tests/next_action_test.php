@@ -420,32 +420,41 @@ final class next_action_test extends \advanced_testcase {
     }
 
     /**
-     * An active enrolment keeps an unlisted course before the enrolment rows are read.
+     * Core's own memo of an active enrolment still keeps an unlisted course, and only it reaches is_enrolled().
      *
-     * The relationship term would keep the course too, so only the cost tells the two apart:
-     * core's is_enrolled() answers first, from its own cache when it can, and the row statement
-     * of get_enrolment_state() is never paid. The control is a user enrolled from a later date,
-     * whom is_enrolled() refuses, and whose answer does need the rows.
+     * Every row is_enrolled() counts is one the enrolment state calls enrolled, so the one answer
+     * is_enrolled() can add is the one it gives from $USER->enrol['enrolled'] before reading any
+     * row: an unexpired entry there keeps the course although no row does. The control is the
+     * same entry expired, on which is_enrolled() reads the rows and refuses. The cost half of the
+     * rule, that a course the memo does not hold never reaches is_enrolled(), is held by the
+     * statement budget in access_probe_test.
      *
      * @return void
      */
-    public function test_an_active_enrolment_answers_before_the_enrolment_rows_are_read(): void {
+    public function test_cores_enrolment_memo_still_keeps_an_unlisted_course(): void {
+        global $USER;
+
         $generator = $this->getDataGenerator();
         $course = $generator->create_course();
-        $active = $generator->create_user();
-        $later = $generator->create_user();
-        $generator->enrol_user($active->id, $course->id);
-        $generator->enrol_user($later->id, $course->id, 'student', 'manual', time() + 3 * DAYSECS, 0);
+        $viewer = $generator->create_user();
         $this->set_course_state((int) $course->id, discoverability::STATE_UNLISTED);
-        $memo = new \ReflectionProperty(access::class, 'enrolmentstate');
 
-        $this->become($active);
-        $this->assertTrue(access::is_course_discoverable((int) $course->id));
-        $this->assertSame([], $memo->getValue(), 'The rows were never read for an active enrolment.');
+        $this->become($viewer);
+        // Load the access data first, as login has: loading it empties $USER->enrol.
+        has_capability('moodle/site:config', \core\context\system::instance());
+        $USER->enrol['enrolled'][(int) $course->id] = time() + HOURSECS;
+        $this->assertTrue(
+            access::is_course_discoverable((int) $course->id),
+            'An unexpired entry of core\'s memo is is_enrolled()\'s answer, and so the predicate\'s.'
+        );
 
-        $this->become($later);
-        $this->assertTrue(access::is_course_discoverable((int) $course->id), 'Control: a scheduled user keeps it too.');
-        $this->assertCount(1, $memo->getValue(), 'Control: and for them the rows were read.');
+        $this->become($viewer);
+        has_capability('moodle/site:config', \core\context\system::instance());
+        $USER->enrol['enrolled'][(int) $course->id] = time() - 1;
+        $this->assertFalse(
+            access::is_course_discoverable((int) $course->id),
+            'Control: an expired entry sends is_enrolled() to the rows, and there are none.'
+        );
     }
 
     /**
