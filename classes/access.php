@@ -187,6 +187,15 @@ class access {
     /** @var array Request cache of the next action, keyed "userid:courseid" => the answer of get_next_action(). */
     private static array $nextaction = [];
 
+    /** @var array Request cache of the courses {@see prime_probe()} has read for, keyed "userid:courseid" => true. */
+    private static array $probed = [];
+
+    /** @var array Request cache of a course's enabled instances, keyed courseid => what enrol_get_instances() returns. */
+    private static array $instances = [];
+
+    /** @var array Request cache of what can_self_enrol() reads per viewer, keyed "userid:instanceid" => facts. */
+    private static array $selffacts = [];
+
     /**
      * Forget everything cached for this request, both state caches included.
      *
@@ -203,6 +212,9 @@ class access {
         self::$related = [];
         self::$enrolmentstate = [];
         self::$nextaction = [];
+        self::$probed = [];
+        self::$instances = [];
+        self::$selffacts = [];
         discoverability::reset_caches();
         category_access::reset_caches();
     }
@@ -267,6 +279,10 @@ class access {
         }
 
         $states = discoverability::get_states($unknown);
+        self::prime_probe(array_keys(array_filter(
+            $states,
+            fn(int $state): bool => $state === discoverability::STATE_UNLISTED
+        )));
         foreach ($unknown as $courseid) {
             $answer = ($states[$courseid] === discoverability::STATE_UNLISTED) ? self::eligible($courseid) : true;
             self::$discoverable[self::memo_key($viewer, $courseid)] = $answer;
@@ -321,9 +337,20 @@ class access {
         foreach ($courses as $course) {
             $ids[] = (int) $course->id;
         }
-        $answers = self::are_courses_discoverable($ids);
         $categories = self::course_categories($courses);
         $catanswers = category_access::are_categories_discoverable(array_values($categories));
+
+        // Every course either half of the rule will probe, read for at once: an unlisted one, and one its category withholds.
+        $states = discoverability::get_states($ids);
+        $probed = [];
+        foreach ($ids as $courseid) {
+            $withheld = !($catanswers[$categories[$courseid] ?? 0] ?? true);
+            if ($withheld || $states[$courseid] === discoverability::STATE_UNLISTED) {
+                $probed[] = $courseid;
+            }
+        }
+        self::prime_probe($probed);
+        $answers = self::are_courses_discoverable($ids);
 
         $kept = [];
         foreach ($courses as $key => $course) {
@@ -429,6 +456,172 @@ class access {
     }
 
     /**
+     * Read, for a whole listing at once, the facts the per-course probe would read course by course.
+     *
+     * The probe ({@see eligible()} and {@see has_course_relationship()}) still decides every
+     * course, in the same order and by the same rules; this only fills the memos it reads, so
+     * a listing costs a fixed number of statements instead of about four per probed course:
+     *
+     * 1. the course contexts, with every enabled instance of those courses: the rows of
+     *    enrol_get_instances($courseid, true), in its order and with its filter;
+     * 2. every row the viewer holds, driven by their user id alone: the answer of
+     *    {@see get_enrolment_state()} for each course, and the own-row test of enrol_self;
+     * 3. the viewer's cohorts, only when a self enrolment instance restricts by one;
+     * 4. one grouped count of the rows on every capped self enrolment instance.
+     *
+     * Statements 2 to 4 are skipped for a course whose viewer is staff of it, the term
+     * {@see compute_course_relationship()} asks first, and 3 and 4 for a course its enrolment
+     * state already keeps. Nothing is primed with a value the per-course call could not have
+     * produced: each memo holds what the statement it replaces reads, from the same rows. A course
+     * that is not primed is computed as before, so priming is an optimisation, never a term.
+     *
+     * Keyed by the viewer, like every memo here, and dropped by {@see reset_caches()}. The
+     * course ids go into one IN list: pass the probed courses of a listing (unlisted or in a
+     * withheld category), not a whole population.
+     *
+     * @param array $courseids Course ids the probe is about to ask about.
+     * @return void
+     */
+    private static function prime_probe(array $courseids): void {
+        global $CFG, $DB, $USER;
+
+        if (!$courseids || self::refuses_viewer()) {
+            // A visitor and the guest account are refused before any of these facts is read.
+            return;
+        }
+        $viewer = (int) $USER->id;
+        $asked = [];
+        foreach (array_unique(array_map('intval', $courseids)) as $courseid) {
+            $key = self::memo_key($viewer, $courseid);
+            if (isset(self::$probed[$key]) || (self::$related[$key] ?? false) === true) {
+                continue;
+            }
+            self::$probed[$key] = true;
+            $asked[] = $courseid;
+        }
+        if (!$asked) {
+            return;
+        }
+
+        // 1. The contexts and the enabled instances, one row per instance or per course without one.
+        [$insql, $params] = $DB->get_in_or_equal($asked, SQL_PARAMS_NAMED, 'crs');
+        $ctxfields = \core\context_helper::get_preload_record_columns_sql('ctx');
+        $records = $DB->get_records_sql(
+            "SELECT COALESCE(e.id, -ctx.id) AS probekey, e.*, {$ctxfields}
+               FROM {context} ctx
+          LEFT JOIN {enrol} e ON e.courseid = ctx.instanceid AND e.status = :enabled
+              WHERE ctx.contextlevel = :courselevel AND ctx.instanceid {$insql}
+           ORDER BY ctx.instanceid, e.sortorder, e.id",
+            $params + ['enabled' => ENROL_INSTANCE_ENABLED, 'courselevel' => CONTEXT_COURSE]
+        );
+        /* The filter of enrol_get_instances($courseid, true): an enabled plugin whose code is present.
+           A course without instances comes back as one row of nulls, which it drops too: no plugin
+           name equals a null enrol, and enrol//lib.php does not exist, so the course keeps []. */
+        $enabled = explode(',', $CFG->enrol_plugins_enabled);
+        foreach ($records as $record) {
+            $courseid = (int) $record->ctxinstance;
+            \core\context_helper::preload_from_record($record);
+            unset($record->probekey);
+            self::$instances[$courseid] = self::$instances[$courseid] ?? [];
+            if (!in_array($record->enrol, $enabled) || !file_exists("$CFG->dirroot/enrol/$record->enrol/lib.php")) {
+                continue;
+            }
+            self::$instances[$courseid][$record->id] = $record;
+        }
+
+        $open = [];
+        foreach ($asked as $courseid) {
+            $context = self::viewer_context($courseid);
+            if ($context && !self::is_staff($context)) {
+                $open[] = $courseid;
+            }
+        }
+        if (!$open) {
+            return;
+        }
+
+        // 2. Every row the viewer holds; rides the userid foreign key of {user_enrolments}.
+        $rows = $DB->get_records_sql(
+            "SELECT ue.id, ue.enrolid, ue.status, ue.timestart, ue.timeend,
+                    e.courseid, e.enrol, e.status AS instancestatus
+               FROM {user_enrolments} ue
+               JOIN {enrol} e ON e.id = ue.enrolid
+              WHERE ue.userid = :userid",
+            ['userid' => $viewer]
+        );
+        $held = [];
+        $bycourse = [];
+        foreach ($rows as $row) {
+            $held[(int) $row->enrolid] = true;
+            $bycourse[(int) $row->courseid][] = $row;
+        }
+
+        $now = time();
+        $selfinstances = [];
+        foreach ($open as $courseid) {
+            $key = self::memo_key($viewer, $courseid);
+            if (!isset(self::$enrolmentstate[$key])) {
+                self::$enrolmentstate[$key] = self::strongest_state($bycourse[$courseid] ?? [], $now);
+            }
+            if (in_array(self::$enrolmentstate[$key]['type'], self::DISCOVERABLE_RELATIONSHIPS, true)) {
+                continue;
+            }
+            foreach (self::$instances[$courseid] ?? [] as $instance) {
+                if ($instance->enrol === 'self') {
+                    $selfinstances[] = $instance;
+                }
+            }
+        }
+        if (!$selfinstances) {
+            return;
+        }
+
+        // 3. The viewer's cohorts, when a self enrolment instance restricts by one.
+        $restricted = false;
+        $capped = [];
+        foreach ($selfinstances as $instance) {
+            // The loose tests of enrol_self_plugin::is_self_enrol_available(), so a field reads the same in both.
+            if ($instance->customint5) {
+                $restricted = true;
+            }
+            if ($instance->customint3 > 0) {
+                $capped[] = (int) $instance->id;
+            }
+        }
+        $cohorts = [];
+        if ($restricted) {
+            $cohorts = array_flip(array_map('intval', $DB->get_fieldset_select(
+                'cohort_members',
+                'cohortid',
+                'userid = :userid',
+                ['userid' => $viewer]
+            )));
+        }
+
+        // 4. The rows on every capped instance: the count can_self_enrol() tests its limit against.
+        $taken = [];
+        if ($capped) {
+            [$capsql, $capparams] = $DB->get_in_or_equal($capped, SQL_PARAMS_NAMED, 'cap');
+            $taken = $DB->get_records_sql_menu(
+                "SELECT ue.enrolid, COUNT(ue.id)
+                   FROM {user_enrolments} ue
+                  WHERE ue.enrolid {$capsql}
+               GROUP BY ue.enrolid",
+                $capparams
+            );
+        }
+
+        foreach ($selfinstances as $instance) {
+            $id = (int) $instance->id;
+            self::$selffacts[self::memo_key($viewer, $id)] = [
+                'holdsrow' => isset($held[$id]),
+                'taken' => (int) ($taken[$id] ?? 0),
+                'incohort' => isset($cohorts[(int) $instance->customint5]),
+            ];
+        }
+    }
+
+    /**
      * The category of each of these courses.
      *
      * Reads the category off the item when it carries one, which both a course
@@ -527,26 +720,41 @@ class access {
             return false;
         }
 
-        if (is_enrolled($context, $USER, '', true)) {
-            return true;
-        }
-
-        /* Staff keep the course. A manager is not enrolled and is usually not in
-           the gating cohort, so without this term an unlisted course would vanish
-           from the listings of the people who administer it.
-
-           The two capabilities are core's own idioms for "may see this course
-           without being enrolled": moodle/course:view is what is_viewing()
-           tests and what managers hold, and moodle/course:viewhiddencourses is
-           the one core consults to decide who still sees a hidden course - held
-           by teacher, editingteacher, coursecreator and manager. Site admins
-           pass both. */
-        if (is_viewing($context) || has_capability('moodle/course:viewhiddencourses', $context)) {
+        // Staff first: the capability terms read the access data loaded once per request, so a manager costs no statement.
+        if (self::is_staff($context)) {
             return true;
         }
 
         // An allow-list, not "anything but none": a suspended or ended enrolment ties nobody to an unlisted course.
-        return in_array(self::get_enrolment_state($courseid)['type'], self::DISCOVERABLE_RELATIONSHIPS, true);
+        if (in_array(self::get_enrolment_state($courseid)['type'], self::DISCOVERABLE_RELATIONSHIPS, true)) {
+            return true;
+        }
+
+        /* Every row is_enrolled($context, $USER, '', true) counts - active, on an enabled instance,
+           now inside its window - is one classify_enrolment() calls enrolled, which the test above
+           already kept. What is left is core's own memo of an earlier answer, which is_enrolled()
+           trusts before reading any row, so it is asked only when that memo holds the course: a
+           course no row ties the viewer to costs no statement here, and the answer is still core's. */
+        return isset($USER->enrol['enrolled'][$courseid]) && is_enrolled($context, $USER, '', true);
+    }
+
+    /**
+     * Whether the current user is staff of a course: may see it without being enrolled.
+     *
+     * Staff keep the course. A manager is not enrolled and is usually not in the gating cohort,
+     * so without this term an unlisted course would vanish from the listings of the people who
+     * administer it.
+     *
+     * The two capabilities are core's own idioms for "may see this course without being
+     * enrolled": moodle/course:view is what is_viewing() tests and what managers hold, and
+     * moodle/course:viewhiddencourses is the one core consults to decide who still sees a hidden
+     * course - held by teacher, editingteacher, coursecreator and manager. Site admins pass both.
+     *
+     * @param \core\context\course $context The course context.
+     * @return bool True for staff of the course.
+     */
+    private static function is_staff(\core\context\course $context): bool {
+        return is_viewing($context) || has_capability('moodle/course:viewhiddencourses', $context);
     }
 
     /**
@@ -685,8 +893,21 @@ class access {
             ['userid' => $USER->id, 'courseid' => $courseid]
         );
 
-        $now = time();
-        $best = $none;
+        self::$enrolmentstate[$key] = self::strongest_state($rows, time());
+        return self::$enrolmentstate[$key];
+    }
+
+    /**
+     * The relationship a course's rows give the viewer: the rule of {@see get_enrolment_state()}.
+     *
+     * One place for it, so that the per-course read and {@see prime_probe()} cannot drift apart.
+     *
+     * @param array $rows The viewer's user_enrolments rows of one course, each as {@see classify_enrolment()} reads it.
+     * @param int $now The time to judge against.
+     * @return array {type: RELATIONSHIP_*, startsat: int, endsat: int}.
+     */
+    private static function strongest_state(array $rows, int $now): array {
+        $best = ['type' => self::RELATIONSHIP_NONE, 'startsat' => 0, 'endsat' => 0];
         foreach ($rows as $row) {
             $state = self::classify_enrolment($row, $now);
             $stronger = self::RELATIONSHIP_RANK[$state['type']] > self::RELATIONSHIP_RANK[$best['type']];
@@ -697,8 +918,6 @@ class access {
                 $best = $state;
             }
         }
-
-        self::$enrolmentstate[$key] = $best;
         return $best;
     }
 
@@ -814,7 +1033,8 @@ class access {
 
         $now = time();
         $outcomes = [];
-        foreach (enrol_get_instances($courseid, true) as $instance) {
+        // What prime_probe() read for a listing is what enrol_get_instances() would return, in its order.
+        foreach (self::$instances[$courseid] ?? enrol_get_instances($courseid, true) as $instance) {
             $plugin = enrol_get_plugin($instance->enrol);
             if (!$plugin) {
                 continue;
@@ -868,7 +1088,11 @@ class access {
             /* Strictly === true: can_self_enrol() returns true, an error string, or
                null - the last when customint5 points at a deleted cohort, which
                cohort_delete_cohort() never clears. Only === true fails closed. */
-            if ($plugin->can_self_enrol($instance, false) === true) {
+            $facts = self::$selffacts[self::memo_key((int) $USER->id, (int) $instance->id)] ?? null;
+            $admits = $facts !== null
+                ? self::self_enrol_admits($instance, $facts)
+                : $plugin->can_self_enrol($instance, false) === true;
+            if ($admits) {
                 return self::outcome($instance, self::NEXT_OPEN);
             }
             if (!$withreasons) {
@@ -1485,6 +1709,49 @@ class access {
         }
         $order = array_flip(self::BLOCKED_PRIORITY);
         return $order[$candidate] < $order[$current] ? $candidate : $current;
+    }
+
+    /**
+     * Whether can_self_enrol($instance, false) would answer true, from the facts {@see prime_probe()} read.
+     *
+     * Mirrors enrol_self_plugin::can_self_enrol() with $checkuserenrolment false and the
+     * is_self_enrol_available() it calls, check for check and with their loose comparisons: the
+     * instance enabled, inside its window, new enrolments on, no row of the viewer's on it, a
+     * place left under customint3, the viewer in the customint5 cohort (a deleted cohort and a
+     * non-member both refuse), and enrol/self:enrolself in the course. Each statement those
+     * methods run is one of the facts, read in bulk from the same table: the own-row test, the
+     * count of rows on the instance, the cohort membership. The parity and drift tests in
+     * tests/access_probe_test.php hold the two together; a change to either core method reddens
+     * them, and this copy is then brought back in step before anything else.
+     *
+     * @param \stdClass $instance Enrol instance of enrol_self.
+     * @param array $facts {holdsrow: bool, taken: int, incohort: bool}, as {@see prime_probe()} stores them.
+     * @return bool True when the viewer may self enrol now.
+     */
+    private static function self_enrol_admits(\stdClass $instance, array $facts): bool {
+        $now = time();
+        if ($instance->status != ENROL_INSTANCE_ENABLED) {
+            return false;
+        }
+        if ($instance->enrolstartdate != 0 && $instance->enrolstartdate > $now) {
+            return false;
+        }
+        if ($instance->enrolenddate != 0 && $instance->enrolenddate < $now) {
+            return false;
+        }
+        if (!$instance->customint6) {
+            return false;
+        }
+        if ($facts['holdsrow']) {
+            return false;
+        }
+        if ($instance->customint3 > 0 && $facts['taken'] >= $instance->customint3) {
+            return false;
+        }
+        if ($instance->customint5 && !$facts['incohort']) {
+            return false;
+        }
+        return has_capability('enrol/self:enrolself', \core\context\course::instance((int) $instance->courseid));
     }
 
     /**
