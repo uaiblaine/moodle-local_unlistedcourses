@@ -124,6 +124,14 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   `moodle/course:update` or the restore capabilities, and core itself applies `visible` on
   restore without asking `moodle/course:visibility`; a second gate would only ever refuse a
   restoring teacher, in the un-hiding direction.
+- **`courseform::save()` ignores the element from a user the form would not offer it to.**
+  This is not a second gate in `set_state()`: restore never reaches `save()`, and the web
+  service and `tool_uploadcourse` never carry the element (core's WS rejects unknown keys).
+  It closes the one route left, a caller that copies its own input into the object it hands
+  `create_course()`/`update_course()`, by asking what `extend()` asks
+  (`moodle/course:visibility`, guessed for the creator on a new course). It drops the element
+  rather than throwing because `create_course()` runs the hook after the insert, with no
+  transaction: a refusal would leave the new course listed, the very change refused.
 - **A call that changes nothing needs no capability.** That is what lets the course form
   re-submit "public" from a frozen control when an editor who may not publish saves an
   unrelated change. Remove the short circuit and that save throws.
@@ -237,7 +245,7 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
 - **`enrol_apply` is absent from a fresh test site's `enrol_plugins_enabled`** —
   `add_apply_enrol()` in `access_test` enables it first.
 - **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds a hundred and
-  thirty-four guards, and each must redden a test. The apply, autoenrol and coursecompleted gates need a
+  thirty-nine guards, and each must redden a test. The apply, autoenrol and coursecompleted gates need a
   stack that mounts those plugins: m503 and m503b mount autoenrol and coursecompleted, and no
   5.3 stack mounts enrol_apply, whose supported range ends at 5.2. `mdl ci`, and so
   `mdl mutate --fast`, installs none of them, skips their tests and reads those gates as held
@@ -296,8 +304,13 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   are relationships with the course — enrolled, application pending, staff — and `can_enrol()`
   is deliberately not one of them.
 - **`$PAGE->set_category_by_id()` checks nothing.** It reads the raw record. On
-  `category.php` the `core_course_category::get($id, MUST_EXIST)` call is the only visibility
-  gate and must stay ahead of it.
+  `category.php` the `core_course_category::get($id, MUST_EXIST)` call refuses a missing or
+  hidden id and `category_access::require_discoverable()` refuses an unlisted one with core's
+  own `unknowncategory`; both must stay ahead of it. An unlisted category keeps `visible = 1`,
+  so without the second check the page answered `nopermissions` for an unlisted id and
+  `unknowncategory` for a missing one, which names the unlisted ids. The holder of
+  `managecategorystate` passes whatever the predicate says, because a system role is no
+  relationship with a category. `category_access_test` pins the call order by reading the source.
 - **`local_unlistedcourses_extend_settings_navigation()` is found through
   `get_plugin_list_with_function()`, which caches by the versions hash.** Adding or renaming
   a plugin callback in `lib.php` needs a version bump, or the callback is not found for a

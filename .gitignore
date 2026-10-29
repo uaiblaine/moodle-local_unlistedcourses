@@ -6,6 +6,9 @@
 .idea/
 .claude/
 
+# Release zips built from git archive
+/dist/
+
 # Node.js / Composer (build tooling only — not part of the plugin)
 node_modules/
 vendor/
