@@ -37,9 +37,10 @@ use local_unlistedcourses\discoverability;
  * submitting, through a persistent freeze (a hidden input), so an editor who
  * may not publish can save an unrelated change without touching the state.
  *
- * None of this is a security boundary. The boundary is
- * {@see discoverability::set_state()}; this class only decides what the form
- * shows, and what it shows is what set_state() will accept.
+ * The publish boundary is {@see discoverability::set_state()}. Between listed
+ * and unlisted set_state() checks nothing, so that restore can carry the state
+ * the way core carries course.visible; {@see save()} therefore ignores the
+ * element from anybody this class would not have offered the control.
  *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine
@@ -138,6 +139,14 @@ class courseform {
      * update_course(), after the course row exists, with $isnewcourse telling
      * the two apart. The site course is never touched.
      *
+     * The element counts only from a user {@see extend()} would have offered the control.
+     * The form drops it for anybody else, but the hook carries whatever object the caller
+     * of create_course() or update_course() built, so a caller that copies its own input
+     * into that object reaches here without the form; the element is dropped here the same
+     * way. Dropped rather than refused: create_course() runs the hook after inserting the
+     * course, with no transaction, so a refusal would leave the new course listed whatever
+     * the default, which is the very change being refused.
+     *
      * @param \stdClass $data The submitted course data.
      * @param bool $isnewcourse Whether the course was just created.
      * @return void
@@ -147,6 +156,9 @@ class courseform {
             return;
         }
         $state = $data->{self::ELEMENT} ?? null;
+        if ($state !== null && !self::offered((int) $data->id, $isnewcourse)) {
+            $state = null;
+        }
         if ($state === null) {
             if (!$isnewcourse) {
                 return;
@@ -154,5 +166,20 @@ class courseform {
             $state = discoverability::get_creation_default();
         }
         discoverability::set_state((int) $data->id, (int) $state);
+    }
+
+    /**
+     * Whether the current user would have been offered the control for this course.
+     *
+     * @param int $courseid The course id.
+     * @param bool $isnewcourse Whether the course was just created.
+     * @return bool True when {@see extend()} would have added the element.
+     */
+    private static function offered(int $courseid, bool $isnewcourse): bool {
+        // The context extend() was given: the category's while the course is being created.
+        $context = $isnewcourse
+            ? \core\context\coursecat::instance((int) get_course($courseid)->category)
+            : \core\context\course::instance($courseid);
+        return self::will_hold(self::CAPABILITY_VISIBILITY, $context, $isnewcourse);
     }
 }

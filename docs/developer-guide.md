@@ -98,7 +98,10 @@ an unrelated change (section 1.4).
 - **The capability check lives here and nowhere else.** Every writer goes through it, so a check
   placed in a form would be a check the other writers route around. Pages and forms check the same
   capabilities only to avoid showing a control whose save would be refused; that is UX, not a
-  boundary.
+  boundary. The one exception is listed versus unlisted on a course, which `set_state()` leaves
+  ungated so that restore carries it the way core carries `visible`: `courseform::save()`, the
+  hook behind `create_course()` and `update_course()`, ignores the element from a user who does
+  not hold (or, creating a course, will not receive) `moodle/course:visibility`, as the form does.
 - `$userid` is the user the capability is checked against and who is recorded in
   `usermodified`; `null` means `$USER`. Restore passes the restoring user, which is not
   necessarily `$USER`.
@@ -176,6 +179,10 @@ viewer holding `managecategorystate` in that category. The page:
 - calls `core_course_category::get($id, MUST_EXIST)` **before** `$PAGE->set_category_by_id()`,
   which reads the raw record and checks nothing, so a category the viewer may not see is never
   named;
+- then `category_access::require_discoverable()`, which throws core's `unknowncategory` for an
+  unlisted category the viewer may not discover, unless they hold `managecategorystate` there: an
+  unlisted category keeps `visible = 1`, so `get()` hands it to anybody logged in, and the
+  capability check alone would tell an unlisted id from a missing one;
 - checks `managecategorystate` (UX only; the boundary is `set_state()`);
 - offers "Public" only to a holder of `publishcategory`, and freezes an already public value with a
   persistent freeze, exactly as the course form does;

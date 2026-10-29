@@ -19,8 +19,11 @@ for a non-default state, each recording `usermodified`.
   `local/unlistedcourses:managecategorystate` (category context, no risk bitmask) sets any
   category state. `local/unlistedcourses:publishcategory` (category context, `RISK_SPAM`)
   enters or leaves the public state of a category.
-- Setting a course to or from unlisted needs no capability of its own here: every route to it is
-  already behind `moodle/course:visibility` on the form, or the update and restore capabilities.
+- Setting a course to or from unlisted needs no capability of its own in `set_state()`: restore
+  carries it the way core carries `visible`. The course form's hook (`courseform::save()`) ignores
+  the element from a user who does not hold, or will not receive as creator,
+  `moodle/course:visibility`, so a caller handing its own input to `create_course()` or
+  `update_course()` cannot list or unlist for a user the form refuses.
 - The viewer is untrusted. A viewer may discover an unlisted course only through a relationship
   with it (enrolled, also from a later date; application pending; staff; able to enrol right
   now; or due to be enrolled on completing another course) and an unlisted
@@ -37,7 +40,9 @@ for a non-default state, each recording `usermodified`.
   backup without one, receives. Each is listed or unlisted, never public, and is applied
   through `set_state()`.
 - One page script, `category.php`: `require_login()`, then `core_course_category::get($id,
-  MUST_EXIST)`, then `require_capability(managecategorystate)`; its form saves through
+  MUST_EXIST)`, then `category_access::require_discoverable()` (core's `unknowncategory` for an
+  unlisted category the viewer may not discover, unless they hold `managecategorystate`), then
+  `require_capability(managecategorystate)`; its form saves through
   `category_discoverability::set_state()`. A settings-navigation node leads to it for holders
   of the capability. One template, `category_preview.mustache`.
 - Hooks: `after_form_definition` and `after_form_submission` (the course form's
@@ -76,8 +81,9 @@ for a non-default state, each recording `usermodified`.
 - **The category page shows cohort names only with `moodle/cohort:view`**, while its counts
   are computed over every cohort at the category and deliberately not gated on it, so that
   "is anybody left" does not depend on who is reading.
-- **`$PAGE->set_category_by_id()` checks nothing**, so the `get()` ahead of it in `category.php`
-  is the visibility gate. Reordering them is a finding.
+- **`$PAGE->set_category_by_id()` checks nothing**, so the `get()` and the
+  `require_discoverable()` ahead of it in `category.php` are the visibility gate. Reordering
+  them is a finding.
 - A public course or category is inert until a theme serves it; the plugin only says "may".
 
 ## De-emphasise
