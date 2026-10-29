@@ -6,8 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Security
+
+- The category discoverability page answers an unlisted category the viewer may not discover with
+  core's "unknown category", the answer for an id that does not exist. It answered "no permission",
+  so a logged-in user could tell which category ids were unlisted.
+- The course form's hook ignores the discoverability element from a user who does not hold, or will
+  not receive as the course's creator, `moodle/course:visibility`, as the form itself does. A plugin
+  that copied its own input into `create_course()` or `update_course()` could otherwise list or
+  unlist a course for such a user. Core's own callers never carry the element.
+
 ### Changed
 
+- `dist/`, where release zips are built, is ignored by git.
 - A listing's discoverability probe reads in bulk. `access::filter_courses()` and
   `are_courses_discoverable()` read, for every unlisted or category-withheld course at once, the
   contexts with the enabled enrol instances, the viewer's enrolment rows, their cohorts and the

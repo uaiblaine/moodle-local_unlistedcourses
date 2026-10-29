@@ -783,4 +783,98 @@ final class category_access_test extends \advanced_testcase {
             'A role switch inside a descendant course must not change the category answer.'
         );
     }
+
+    /**
+     * A page refuses an unlisted category the way core_course_category::get() refuses a missing id.
+     *
+     * @return void
+     */
+    public function test_a_page_refuses_an_undiscoverable_category_as_though_it_did_not_exist(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $unlisted = $generator->create_category();
+        $this->set_category_unlisted((int) $unlisted->id, true);
+        $listed = $generator->create_category();
+        $this->setUser($generator->create_user());
+
+        // What core throws for an id that does not exist is what the page must throw.
+        try {
+            \core_course_category::get(999999, MUST_EXIST);
+            $this->fail('Precondition: core must refuse a missing id.');
+        } catch (\moodle_exception $missing) {
+            $this->assertSame('unknowncategory', $missing->errorcode);
+        }
+
+        $this->assertNotNull(
+            \core_course_category::get((int) $unlisted->id, IGNORE_MISSING),
+            'Precondition: core hands the unlisted category, which stays visible, to this user.'
+        );
+        try {
+            category_access::require_discoverable((int) $unlisted->id, category_discoverability::CAPABILITY_MANAGE);
+            $this->fail('An unlisted category must be refused to a user with no relationship with it.');
+        } catch (\moodle_exception $refused) {
+            $this->assertSame($missing->errorcode, $refused->errorcode);
+            $this->assertSame($missing->module, $refused->module);
+            $this->assertSame(get_string('unknowncategory', 'error', $unlisted->id), $refused->getMessage());
+        }
+
+        // Control: the same user is let through on a listed category.
+        category_access::require_discoverable((int) $listed->id, category_discoverability::CAPABILITY_MANAGE);
+    }
+
+    /**
+     * The admitting capability lets a viewer through without any relationship with the category.
+     *
+     * @return void
+     */
+    public function test_the_admitting_capability_reaches_the_page_from_the_system_context(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $category = $generator->create_category();
+        $this->set_category_unlisted((int) $category->id, true);
+
+        // A bespoke system role that grants the page's capability and nothing else.
+        $roleid = $generator->create_role();
+        $system = \core\context\system::instance();
+        assign_capability(category_discoverability::CAPABILITY_MANAGE, CAP_ALLOW, $roleid, $system->id);
+        $steward = $generator->create_user();
+        role_assign($roleid, $steward->id, $system->id);
+        $this->setUser($steward);
+        category_access::reset_caches();
+
+        $this->assertFalse(
+            category_access::is_category_discoverable((int) $category->id),
+            'Precondition: a system role is no relationship with the category.'
+        );
+        category_access::require_discoverable((int) $category->id, category_discoverability::CAPABILITY_MANAGE);
+
+        // Control: a capability the steward does not hold admits nothing.
+        $this->expectException(\moodle_exception::class);
+        $this->expectExceptionMessage(get_string('unknowncategory', 'error', $category->id));
+        category_access::require_discoverable((int) $category->id, category_discoverability::CAPABILITY_PUBLISH);
+    }
+
+    /**
+     * The category page refuses an undiscoverable category after core's own check and before it names it.
+     *
+     * A page cannot be required under PHPUnit, so this reads the page's source: the refusal must
+     * follow core_course_category::get(), which refuses a missing or hidden id first, and precede
+     * set_category_by_id(), the first call that puts the category's name on the page.
+     *
+     * @return void
+     */
+    public function test_the_category_page_refuses_before_it_names_the_category(): void {
+        global $CFG;
+
+        $source = file_get_contents($CFG->dirroot . '/local/unlistedcourses/category.php');
+        $get = strpos($source, 'core_course_category::get($id, MUST_EXIST);');
+        $refusal = strpos($source, 'category_access::require_discoverable($id, category_discoverability::CAPABILITY_MANAGE);');
+        $named = strpos($source, '$PAGE->set_category_by_id($id);');
+
+        $this->assertNotFalse($get, 'Control: the page asks core first.');
+        $this->assertNotFalse($named, 'Control: the page names the category.');
+        $this->assertNotFalse($refusal, 'The page must refuse an undiscoverable category.');
+        $this->assertGreaterThan($get, $refusal);
+        $this->assertLessThan($named, $refusal);
+    }
 }

@@ -27,6 +27,7 @@
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
+use local_unlistedcourses\category_access;
 use local_unlistedcourses\category_discoverability;
 use local_unlistedcourses\local\form\categorystate;
 
@@ -37,11 +38,13 @@ $id = required_param('id', PARAM_INT);
 
 require_login();
 
-/* Core's visibility check must run before set_category_by_id(), which reads the raw
-   record and checks nothing: get() throws for a category the viewer may not see, so
-   the page never names it. */
+/* Both checks run before set_category_by_id(), which reads the raw record and checks
+   nothing. get() refuses a missing or hidden category; it hands an unlisted one, which
+   stays visible, to anybody logged in, so require_discoverable() refuses that one the
+   way get() refuses a missing id, before the capability check below can tell them apart. */
 $category = core_course_category::get($id, MUST_EXIST);
 $context = \core\context\coursecat::instance($id);
+category_access::require_discoverable($id, category_discoverability::CAPABILITY_MANAGE);
 
 // Sets the page context to the category's own, so no set_context() call is needed here.
 $PAGE->set_category_by_id($id);

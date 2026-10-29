@@ -120,6 +120,33 @@ class category_access {
     }
 
     /**
+     * Refuse a page about this category, as though it did not exist, to a viewer who may not discover it.
+     *
+     * An unlisted category keeps visible = 1, so core_course_category::get() hands it to any
+     * logged-in user, and a later capability check would answer "no permission" where a missing
+     * id answers "unknown category": the difference names the unlisted ids. This throws what
+     * core_course_category::get() throws for a missing id. The caller has already proved that
+     * the category exists through that get(), which also keeps core's own refusal of a hidden one.
+     *
+     * A viewer holding $unless in the category context passes whatever this class answers: a
+     * capability granted at the system context is no relationship with the category
+     * ({@see role_term()} reads no system assignment), yet it must still reach the page it grants.
+     *
+     * @param int $categoryid The category id.
+     * @param string $unless A capability that admits the viewer on its own.
+     * @return void
+     * @throws \moodle_exception unknowncategory, when the viewer may not discover the category.
+     */
+    public static function require_discoverable(int $categoryid, string $unless): void {
+        if (has_capability($unless, \core\context\coursecat::instance($categoryid))) {
+            return;
+        }
+        if (!self::is_category_discoverable($categoryid)) {
+            throw new \moodle_exception('unknowncategory', a: $categoryid);
+        }
+    }
+
+    /**
      * Whether the current user may discover each of these categories.
      *
      * @param array $categoryids Category ids.
