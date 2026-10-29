@@ -493,4 +493,80 @@ final class courseform_test extends \advanced_testcase {
         $this->assertTrue(discoverability::is_unlisted($listed));
         $this->assertTrue(discoverability::is_unlisted($this->create_without_element((int) $category->id, 'fresh')));
     }
+
+    /**
+     * An update carries the element only from a user who would have been offered the control.
+     *
+     * @return void
+     */
+    public function test_an_update_ignores_the_element_from_a_user_without_course_visibility(): void {
+        $this->resetAfterTest();
+        $course = $this->getDataGenerator()->create_course();
+        $context = \core\context\course::instance($course->id);
+
+        // An editor who may update the course and nothing else, the shape the form drops the control for.
+        $roleid = $this->getDataGenerator()->create_role();
+        assign_capability('moodle/course:update', CAP_ALLOW, $roleid, $context->id);
+        $editor = $this->getDataGenerator()->create_user();
+        role_assign($roleid, $editor->id, $context->id);
+        $this->setUser($editor);
+        $this->assertFalse(has_capability('moodle/course:visibility', $context), 'Precondition: no course visibility.');
+
+        update_course((object) ['id' => $course->id, courseform::ELEMENT => discoverability::STATE_UNLISTED]);
+        $this->assertSame(
+            discoverability::STATE_DEFAULT,
+            discoverability::get_state((int) $course->id),
+            'A caller copying its own input into update_course() must not unlist for an editor the form refuses.'
+        );
+
+        // Control: once the editor holds course visibility, the same call unlists.
+        assign_capability('moodle/course:visibility', CAP_ALLOW, $roleid, $context->id);
+        accesslib_clear_all_caches_for_unit_testing();
+        $this->setUser($editor);
+        update_course((object) ['id' => $course->id, courseform::ELEMENT => discoverability::STATE_UNLISTED]);
+        $this->assertTrue(discoverability::is_unlisted((int) $course->id));
+    }
+
+    /**
+     * A new course gets the default, not the element, from a user who would not have been offered the control.
+     *
+     * @return void
+     */
+    public function test_a_new_course_ignores_the_element_from_a_user_who_will_not_hold_course_visibility(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $context = \core\context\coursecat::instance($category->id);
+        $this->set_creation_default(discoverability::STATE_UNLISTED);
+
+        $outsider = $this->getDataGenerator()->create_user();
+        $this->setUser($outsider);
+        $this->assertFalse(
+            guess_if_creator_will_have_course_capability('moodle/course:visibility', $context),
+            'Precondition: the form would not offer this user the control.'
+        );
+        $course = create_course((object) [
+            'fullname' => 'On behalf of an outsider',
+            'shortname' => 'outsider',
+            'category' => $category->id,
+            courseform::ELEMENT => discoverability::STATE_DEFAULT,
+        ]);
+        $this->assertTrue(
+            discoverability::is_unlisted((int) $course->id),
+            'The site default must apply when the element comes from a user the form refuses.'
+        );
+
+        // Control: a course creator, offered the control through the role they will receive, lists it.
+        $creator = $this->getDataGenerator()->create_user();
+        role_assign($DB->get_field('role', 'id', ['shortname' => 'coursecreator']), $creator->id, $context->id);
+        $this->setUser($creator);
+        $course = create_course((object) [
+            'fullname' => 'By a course creator',
+            'shortname' => 'creator',
+            'category' => $category->id,
+            courseform::ELEMENT => discoverability::STATE_DEFAULT,
+        ]);
+        $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_state((int) $course->id));
+    }
 }
