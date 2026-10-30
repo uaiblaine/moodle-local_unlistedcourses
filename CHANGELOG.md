@@ -4,7 +4,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## v5.3-r3 (2026100507) - 2026-10-30
+
+Version `2026100507`: two security fixes from an external audit and a listing probe that reads in
+bulk. No database changes.
 
 ### Security
 
@@ -32,6 +35,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Self enrolment is judged by a check-for-check copy of `enrol_self`'s `can_self_enrol()` over
   the facts read in bulk; a parity test over every check and a fingerprint of the two core
   methods hold the copy to core.
+- The plugins directory readiness test splits a stylesheet's selector lists only at top-level
+  commas, so a comma inside `:not()`, `:is()`, `:where()` or `:has()` no longer reads as an
+  unscoped selector.
 
 ## v5.3-r2 (2026100506) - 2026-10-22
 
