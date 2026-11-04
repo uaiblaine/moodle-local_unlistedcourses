@@ -24,6 +24,18 @@
 
 defined('MOODLE_INTERNAL') || die();
 
+$string['applydefault'] = 'Aplicar o padrão aos cursos existentes';
+$string['applydefault_changed'] = 'A descobribilidade padrão de cursos novos mudou desde que esta tarefa foi agendada. Nenhum curso foi alterado.';
+$string['applydefault_confirm'] = '{$a->count} cursos criados antes de {$a->date} não têm descobribilidade própria. Cada um deles passará a {$a->state}, em uma tarefa em segundo plano que roda com o próximo cron.
+
+Essa data é quando o padrão de cursos novos passou a {$a->state} na página de configurações, ou agora, se a mudança não deixou registro lá. Os cursos criados desde então receberam o padrão, ou uma escolha feita por alguém, e ficam como estão, assim como os cursos cuja descobribilidade alguém definiu e a página inicial do site. Um curso que alguém voltou a Listado antes dessa data também não tem descobribilidade própria e passará a {$a->state} também.';
+$string['applydefault_desc'] = 'O padrão só chega a um curso quando ele é criado. <a href="{$a}">Aplique-o aos cursos existentes</a> que não têm descobribilidade própria, como os cursos que este site tinha antes de o plugin ser instalado ou antes de o padrão ser escolhido.';
+$string['applydefault_done'] = 'Descobribilidade padrão aplicada: {$a->applied} cursos alterados, {$a->skipped} ignorados porque alguém definiu a descobribilidade deles nesse meio-tempo, {$a->failed} com falha.';
+$string['applydefault_listed'] = 'A descobribilidade padrão de cursos novos é Listado, que é o que um curso sem descobribilidade própria já é; não há nada a aplicar. Escolha Não listado como padrão primeiro.';
+$string['applydefault_none'] = 'Todo curso criado antes de {$a->date} já tem descobribilidade própria. Não há nada a alterar.';
+$string['applydefault_queued'] = 'A descobribilidade padrão está sendo aplicada aos cursos existentes. Esta página se atualiza quando a tarefa terminar.';
+$string['applydefault_stale'] = 'Nada foi agendado: a descobribilidade padrão de cursos novos foi salva de novo, ou a tarefa já foi agendada, desde que a página foi exibida. Revise os cursos que ela alteraria e confirme de novo.';
+$string['applydefault_task'] = 'Aplicar a descobribilidade padrão aos cursos existentes';
 $string['categorystate'] = 'Descobribilidade';
 $string['categorystate_help'] = 'Quem pode saber que esta categoria existe.
 

@@ -28,6 +28,15 @@ if ($hassiteconfig) {
     $settings = new admin_settingpage('local_unlistedcourses', new lang_string('pluginname', 'local_unlistedcourses'));
     $ADMIN->add('localplugins', $settings);
 
+    // Reached from the link below the default setting, so it stays out of the tree itself.
+    $ADMIN->add('localplugins', new admin_externalpage(
+        'local_unlistedcourses_applydefault',
+        new lang_string('applydefault', 'local_unlistedcourses'),
+        new moodle_url('/local/unlistedcourses/applydefault.php'),
+        'moodle/site:config',
+        true
+    ));
+
     if ($ADMIN->fulltree) {
         // Listed and unlisted only: see discoverability::default_states() for why public is not a choice.
         $choices = [
@@ -41,6 +50,16 @@ if ($hassiteconfig) {
             new lang_string('defaultstate_desc', 'local_unlistedcourses'),
             \local_unlistedcourses\discoverability::STATE_DEFAULT,
             $choices
+        ));
+
+        $settings->add(new admin_setting_description(
+            'local_unlistedcourses/applydefault',
+            new lang_string('applydefault', 'local_unlistedcourses'),
+            new lang_string(
+                'applydefault_desc',
+                'local_unlistedcourses',
+                (new moodle_url('/local/unlistedcourses/applydefault.php'))->out()
+            )
         ));
 
         $settings->add(new admin_setting_configselect(

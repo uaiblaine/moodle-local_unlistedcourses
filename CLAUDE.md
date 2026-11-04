@@ -11,8 +11,10 @@ tables (`local_unlistedcourses_state`, `local_unlistedcourses_catstate`, a row o
 non-default states), **three capabilities** (`local/unlistedcourses:publish`,
 `local/unlistedcourses:managecategorystate`, `local/unlistedcourses:publishcategory`), two
 events, two settings (the default state of a new course and of a course restored from a
-backup without one, listed or unlisted, never public), one page
-(`category.php`, the category's editing surface, with one template for its preview). **The
+backup without one, listed or unlisted, never public), two pages
+(`category.php`, the category's editing surface, with one template for its preview, and
+`applydefault.php`, which queues the adhoc task `task\apply_default_state` that gives the
+creation default to the courses that predate it, `local\default_backfill`). **The
 component name is narrower than its scope** — it was born as "unlisted courses" and now
 owns "public" and categories too; renaming a component means uninstall + reinstall, so the
 name stays and the strings talk about discoverability. The technical guide for theme and
@@ -179,6 +181,15 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   `process_local_unlistedcourses_state()` records that it ran. Only an absent element on
   `TARGET_NEW_COURSE` gets `restoredefaultstate`. A `tool_uploadcourse` template restore is
   `create_course()` then `TARGET_CURRENT_ADDING`, so it gets the creation default.
+- **Applying the default to existing courses reads "nobody chose this" from two facts**: no row,
+  and a `timecreated` before the default took its current value, read from `config_log` (core logs
+  every settings-page write, install defaults included; `set_config()` and the CLI log nothing, and
+  then the cutoff is the moment of queueing). No row alone is not enough: listed is the absence of a
+  row, so every course created since the default took effect without a row was given listed on
+  purpose. The writes are direct inserts, not `set_state()`, because the unique key on `courseid` is
+  what keeps a state set while the task runs (listed to unlisted is ungated anyway); a failed chunk
+  is rolled back and replayed course by course, and every row fires `course_state_updated`, which
+  block_compass's catalogue cache is purged by. `mutations/apply_default.conf` holds its gates.
 - **On a new course the form asks what the creator WILL hold**, through core's own
   `guess_if_creator_will_have_course_capability()` (the call behind the core visibility
   select): the category context is all there is, the creator's role in the course does not
