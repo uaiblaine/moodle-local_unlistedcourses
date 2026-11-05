@@ -24,6 +24,18 @@
 
 defined('MOODLE_INTERNAL') || die();
 
+$string['applydefault'] = 'Apply the default to existing courses';
+$string['applydefault_changed'] = 'The default discoverability for new courses has changed since this task was queued. No course was changed.';
+$string['applydefault_confirm'] = '{$a->count} courses created before {$a->date} have no discoverability of their own. Each of them will become {$a->state}, in a background task that runs with the next cron.
+
+That date is when the default for new courses became {$a->state} on the settings page, or now if the change left no record there. Courses created since then received the default, or a choice somebody made, and are left as they are, as are courses whose discoverability somebody has set and the site home. A course somebody moved back to Listed before that date has no discoverability of its own either, and will become {$a->state} too.';
+$string['applydefault_desc'] = 'The default reaches a course only when it is created. <a href="{$a}">Apply it to the existing courses</a> that have no discoverability of their own, such as the courses this site had before the plugin was installed or before the default was chosen.';
+$string['applydefault_done'] = 'Default discoverability applied: {$a->applied} courses changed, {$a->skipped} skipped because somebody set their discoverability meanwhile, {$a->failed} failed.';
+$string['applydefault_listed'] = 'The default discoverability for new courses is Listed, which is what a course without a discoverability of its own already is, so there is nothing to apply. Choose Unlisted as the default first.';
+$string['applydefault_none'] = 'Every course created before {$a->date} already has a discoverability of its own. There is nothing to change.';
+$string['applydefault_queued'] = 'The default discoverability is being applied to the existing courses. This page updates when the task has finished.';
+$string['applydefault_stale'] = 'Nothing was queued: the default discoverability for new courses was saved again, or the task was queued already, since the page was shown. Review the courses it would change and confirm again.';
+$string['applydefault_task'] = 'Apply the default discoverability to existing courses';
 $string['categorystate'] = 'Discoverability';
 $string['categorystate_help'] = 'Who may learn that this category exists.
 

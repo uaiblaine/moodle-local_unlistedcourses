@@ -118,7 +118,7 @@ There is deliberately **no data generator** for either state: tests and Behat st
 
 ### 1.4 The writers
 
-**Courses** have four writers, all ending in `discoverability::set_state()`:
+**Courses** have four writers that end in `discoverability::set_state()`, and one that does not:
 
 1. **The course settings form.** `db/hooks.php` registers `\core_course\hook\after_form_definition`
    and `\core_course\hook\after_form_submission`; `classes/hook_callbacks.php` hands both to
@@ -151,6 +151,16 @@ There is deliberately **no data generator** for either state: tests and Behat st
    on an overwrite restore into an unlisted course a clamp would turn a refusal into an un-hiding
    write. Course duplication goes through the same backup and restore.
 4. **Code** - your plugin, a test, a Behat step - calling `set_state()` directly.
+5. **Applying the default to existing courses** (`applydefault.php`, `moodle/site:config`), which
+   queues `task\apply_default_state`; the task calls `local\default_backfill::run()`. It gives the
+   creation default to every course with **no row** that was **created before the default took its
+   current value** (the latest `config_log` record of `defaultstate` when it holds the current value,
+   otherwise the moment of queueing), the site course never. It inserts the rows directly rather than
+   through `set_state()`: the only transition it makes is listed to unlisted, which `set_state()` does
+   not gate, and the unique key on `courseid` is what stops it from overwriting a state somebody sets
+   while it runs (a chunk whose transaction fails is rolled back and replayed course by course). It
+   fires `course_state_updated` for each row, with the administrator who queued it as the user, so a
+   consumer that listens for that event, as `block_compass` does, needs nothing else.
 
 Two admin settings (`settings.php`, *Site administration > Plugins > Local plugins > Course
 discoverability*) supply a state when nobody chose one. Both offer listed or unlisted, default to
