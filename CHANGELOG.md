@@ -4,9 +4,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## v5.3-r4 (2026100508) - 2026-11-05
 
-Version `2026100508`. No database changes.
+Version `2026100508`: three security fixes from a review, and a way to give the default to the
+courses that predate it. No database changes.
 
 ### Security
 
