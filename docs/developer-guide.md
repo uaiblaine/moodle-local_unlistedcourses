@@ -128,7 +128,11 @@ There is deliberately **no data generator** for either state: tests and Behat st
    creator's role in the new course does not exist yet, so the form asks core's
    `guess_if_creator_will_have_course_capability()` - the call behind core's own visibility
    select - instead of `has_capability()`. The "Public" option appears only for a user who may
-   publish. A course that is already public, edited by somebody who may not publish, shows the
+   publish now: that one is a plain `has_capability()` even on a new course, because
+   `create_course()` writes the state before `course/edit.php` gives the creator
+   `creatornewroleid`, so a publish capability reached only through that role would be refused
+   after the course row exists. For the same reason `save()` gives a new course the creation
+   default, not a refusal, when a public value comes from a user who may not publish yet. A course that is already public, edited by somebody who may not publish, shows the
    control frozen with `setPersistantFreeze(true)`, which renders a hidden input carrying the
    current value, so saving an unrelated change re-submits "public" and the no-change short circuit
    lets it through. (`hardFreeze()` turns persistence off and must not be used there.)
@@ -339,6 +343,8 @@ answer for those courses. `prime_relationships()` hands it over: it writes **tru
 relationship memo for each id, for the current viewer, and is consumed by both the course rule and
 the category term. Rules:
 
+- **A visitor and the guest account are ignored**, as by every other entry point: the memo is read
+  before the guard in `viewer_context()`, so the primer carries the guard itself.
 - **Only true is ever written.** The caller vouches for a relationship it read; it is not
   authoritative about the absence of one, because being staff of a course is a relationship too and
   no enrolment table carries it. An unprimed course is computed as usual.

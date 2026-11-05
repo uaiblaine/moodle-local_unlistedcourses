@@ -85,7 +85,11 @@ class courseform {
         $current = $creating
             ? discoverability::get_creation_default()
             : discoverability::get_state((int) $course->id);
-        $canpublish = self::will_hold(discoverability::CAPABILITY_PUBLISH, $context, $creating);
+        /* Publishing is asked of what the user holds now, never guessed: create_course() runs save()
+           and so set_state() before course/edit.php gives the creator creatornewroleid, so a publish
+           capability reached only through that role is refused at the write. The category context a
+           new course is given here is what its course context inherits at that moment. */
+        $canpublish = has_capability(discoverability::CAPABILITY_PUBLISH, $context);
 
         $options = [
             discoverability::STATE_DEFAULT => get_string('state_default', 'local_unlistedcourses'),
@@ -145,7 +149,10 @@ class courseform {
      * into that object reaches here without the form; the element is dropped here the same
      * way. Dropped rather than refused: create_course() runs the hook after inserting the
      * course, with no transaction, so a refusal would leave the new course listed whatever
-     * the default, which is the very change being refused.
+     * the default, which is the very change being refused. For the same reason a public
+     * value on a new course from a user who may not publish yet, the check set_state() makes,
+     * gives the course the default instead; on an update the hook runs before the row is
+     * written, so set_state() refuses it there.
      *
      * @param \stdClass $data The submitted course data.
      * @param bool $isnewcourse Whether the course was just created.
@@ -157,6 +164,11 @@ class courseform {
         }
         $state = $data->{self::ELEMENT} ?? null;
         if ($state !== null && !self::offered((int) $data->id, $isnewcourse)) {
+            $state = null;
+        }
+        $public = $state !== null && (int) $state === discoverability::STATE_PUBLIC;
+        if ($isnewcourse && $public && !self::may_publish((int) $data->id)) {
+            // The course row exists already: a refusal from set_state() would leave it listed, so it gets the default.
             $state = null;
         }
         if ($state === null) {
@@ -181,5 +193,15 @@ class courseform {
             ? \core\context\coursecat::instance((int) get_course($courseid)->category)
             : \core\context\course::instance($courseid);
         return self::will_hold(self::CAPABILITY_VISIBILITY, $context, $isnewcourse);
+    }
+
+    /**
+     * Whether the current user may publish this course now: the check set_state() is about to make.
+     *
+     * @param int $courseid The course id.
+     * @return bool True when set_state() would let the current user make the course public.
+     */
+    private static function may_publish(int $courseid): bool {
+        return has_capability(discoverability::CAPABILITY_PUBLISH, \core\context\course::instance($courseid));
     }
 }

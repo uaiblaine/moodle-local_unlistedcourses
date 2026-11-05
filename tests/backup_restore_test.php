@@ -25,6 +25,7 @@
 namespace local_unlistedcourses;
 
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Tests that the state travels with a course, and that a restore cannot publish one.
@@ -545,10 +546,10 @@ final class backup_restore_test extends \advanced_testcase {
      *
      * @param \stdClass $course The course to back up.
      * @param int $from The value the backup carries.
-     * @param int $to The value to write instead; equal to $from leaves the file as it was.
+     * @param int|string $to The value to write instead, malformed ones included; equal to $from leaves the file as it was.
      * @return string The backup id.
      */
-    private function backup_with_state_value(\stdClass $course, int $from, int $to): string {
+    private function backup_with_state_value(\stdClass $course, int $from, int|string $to): string {
         global $CFG;
 
         $backupid = $this->backup_course($course);
@@ -636,5 +637,40 @@ final class backup_restore_test extends \advanced_testcase {
         $new = $this->restore_as_new_by($backupid, $course, (int) get_admin()->id, 'listed');
         $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_state($new));
         $this->assertFalse(discoverability::is_unlisted($new), 'An applied value must win over the default.');
+    }
+
+    /**
+     * Values of the state element that are not a number.
+     *
+     * @return array Map of case name => [the element's content].
+     */
+    public static function malformed_state_provider(): array {
+        return [
+            'empty' => [''],
+            'text' => ['abc'],
+            'leading digit' => ['0abc'],
+        ];
+    }
+
+    /**
+     * An empty or non-numeric state is skipped like an unknown one, never read as listed.
+     *
+     * Each of these casts to 0, the listed state, which the restore would otherwise apply over
+     * the restore default.
+     *
+     * @param string $value The element's content.
+     * @return void
+     */
+    #[DataProvider('malformed_state_provider')]
+    public function test_a_malformed_state_in_a_backup_gets_the_restore_default(string $value): void {
+        $this->resetAfterTest();
+        $course = $this->getDataGenerator()->create_course();
+        $this->setAdminUser();
+        discoverability::set_state((int) $course->id, discoverability::STATE_UNLISTED);
+        set_config(discoverability::SETTING_RESTORE_DEFAULT, discoverability::STATE_UNLISTED, 'local_unlistedcourses');
+
+        $backupid = $this->backup_with_state_value($course, discoverability::STATE_UNLISTED, $value);
+        $new = $this->restore_as_new_by($backupid, $course, (int) get_admin()->id, 'malformed');
+        $this->assertTrue(discoverability::is_unlisted($new), 'A malformed value must not be applied as listed.');
     }
 }
