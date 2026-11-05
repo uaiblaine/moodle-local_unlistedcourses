@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Version `2026042008`. No database changes.
 
+### Security
+
+- A course creator who would hold `local/unlistedcourses:publish` only through the role given to
+  new course creators (`creatornewroleid`) is no longer offered *Public* when creating a course.
+  The state is written before core gives the creator that role, so the offered choice was refused
+  after the course had been inserted, leaving it listed whatever the creation default and its
+  creator unenrolled. A *Public* value on a new course from anybody who may not publish yet now
+  gives the course the creation default instead of failing.
+- `access::prime_relationships()` ignores a visitor and the guest account, as every other entry
+  point of `access` does: a caller that primed the guest's enrolments could otherwise name
+  unlisted courses to the guest account.
+- A backup whose state element is empty or not a number is skipped like an unknown value, so a
+  new course gets the restore default; before, the value was read as listed.
+
 ### Added
 
 - *Apply the default to existing courses*, linked from the plugin's settings page: gives the

@@ -102,7 +102,8 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   `has_course_relationship()` answers from memory, skipping even the probe's bulk reads. The
   caller is vouching for a relationship it read; it is NOT authoritative about the absence of
   one, because being staff of a course is a relationship too and no enrolment table carries
-  it. Viewer-keyed, dropped by `reset_caches()`.
+  it. Viewer-keyed, dropped by `reset_caches()`. It ignores a visitor and the guest account
+  itself, because `has_course_relationship()` reads the memo before `viewer_context()`.
 - **The listing probe is primed in bulk and decided per course.** `access::prime_probe()` reads,
   for every unlisted or category-withheld course of a listing at once, what the per-course rule
   would read: contexts with the enabled instances, the viewer's rows, their cohorts, the counts
@@ -195,6 +196,10 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   select): the category context is all there is, the creator's role in the course does not
   exist yet, and a course creator gains `moodle/course:visibility` only through
   `creatornewroleid`. A plain `has_capability()` hid the control from course creators.
+  **Publish is the exception: it is asked of what the creator holds NOW.** `set_state()` runs
+  inside `create_course()`, before `course/edit.php` gives `creatornewroleid`, so a guessed
+  publish was refused after the insert and left the course listed. `save()` drops a public value
+  on a new course from a user who may not publish to the creation default for the same reason.
 - **The site course has no state.** `set_state()` refuses it; the form skips it; a row
   written by hand for it is what the SITEID exemption in `access::compute_course_relationship()`
   exists for, and its test writes exactly that row.
@@ -257,7 +262,7 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
 - **`enrol_apply` is absent from a fresh test site's `enrol_plugins_enabled`** —
   `add_apply_enrol()` in `access_test` enables it first.
 - **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds a hundred and
-  thirty-eight guards, and each must redden a test. The apply, autoenrol and coursecompleted gates need a
+  forty-two guards, and each must redden a test. The apply, autoenrol and coursecompleted gates need a
   stack that mounts those plugins (m502, m502b): `mdl ci`, and so `mdl mutate --fast`,
   installs none of them, skips their tests and reads those gates as held by nothing. Adding a
   guard without a mutation is how untested ones get in. The first sweep found one that reddened nothing — the restore clamp above —

@@ -1838,4 +1838,42 @@ final class access_test extends \advanced_testcase {
         access::reset_caches();
         $this->assertCount(0, access::filter_courses($item), 'reset_caches() drops what was primed.');
     }
+
+    /**
+     * The guest account cannot be primed into an unlisted course, nor out of an unlisted category.
+     *
+     * The memo is read before the visitor and guest guard of viewer_context(), so a caller that
+     * hands over the guest's rows (an enrolment given to the guest account by mistake) must be
+     * ignored by the primer itself.
+     *
+     * @return void
+     */
+    public function test_prime_relationships_ignores_the_guest_account(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $unlisted = $generator->create_course();
+        $this->set_unlisted((int) $unlisted->id, true);
+        $category = $generator->create_category();
+        $withheld = $generator->create_course(['category' => $category->id]);
+        $this->set_category_unlisted((int) $category->id, true);
+        $items = [
+            (object) ['id' => (int) $unlisted->id, 'category' => (int) $unlisted->category],
+            (object) ['id' => (int) $withheld->id, 'category' => (int) $category->id],
+        ];
+        $primed = [(int) $unlisted->id, (int) $withheld->id];
+
+        $this->setGuestUser();
+        access::reset_caches();
+        access::prime_relationships($primed);
+        $this->assertFalse(access::is_course_discoverable((int) $unlisted->id), 'A primed guest must not discover it.');
+        $this->assertCount(0, access::filter_courses($items), 'A primed guest must keep neither course.');
+
+        // Control: the same primer for an ordinary user keeps both.
+        $this->setUser($generator->create_user());
+        access::reset_caches();
+        access::prime_relationships($primed);
+        $this->assertTrue(access::is_course_discoverable((int) $unlisted->id));
+        $this->assertCount(2, access::filter_courses($items));
+    }
 }
