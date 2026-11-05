@@ -34,8 +34,12 @@ for a non-default state, each recording `usermodified`.
 
 ## Surfaces
 
-- **No web service of its own** (no `db/services.php`), no scheduled or adhoc task and no file
-  serving. Two admin settings, `defaultstate` and `restoredefaultstate`:
+- **No web service of its own** (no `db/services.php`), no scheduled task and no file
+  serving. One adhoc task, `task\apply_default_state`, queued only from `applydefault.php`
+  (`admin_externalpage_setup()` with `moodle/site:config`, then a POST with `require_sesskey()`):
+  it gives the creation default to courses with no state row created before the default took
+  effect, inserting the rows directly because listed to unlisted is a transition `set_state()`
+  deliberately does not gate; it never overwrites a row and never touches the site course. Two admin settings, `defaultstate` and `restoredefaultstate`:
   the state a course created without the form's element, or restored as a new course from a
   backup without one, receives. Each is listed or unlisted, never public, and is applied
   through `set_state()`.

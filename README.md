@@ -179,6 +179,33 @@ a web service call, a CSV upload or a restore run by somebody without it would b
   into an existing course leaves that course's state alone. A course created by a CSV
   upload from a template backup is created first, so it gets the default for new courses.
 
+#### Applying the default to existing courses
+
+The default reaches a course only when it is created, so the courses a site already had when the
+plugin was installed, or when an administrator chose unlisted as the default, stay listed. The
+settings page links to *Apply the default to existing courses*
+(`local/unlistedcourses/applydefault.php`, site administrators only, `moodle/site:config`), which
+counts the courses the default would reach, asks for confirmation, and queues an adhoc task; the
+page itself writes nothing, and the task runs with the next cron, showing its progress on the page.
+The confirmation is bound to the date it names: if the default is saved again before it is
+confirmed, nothing is queued and the page asks again.
+
+A course qualifies when it has **no stored state** and was **created before the default took its
+current value**. A stored state, whatever it is, is never overwritten, and the site home is never
+touched. Listed is the absence of a row, so a course somebody set to listed looks like a course
+nobody touched; the creation time tells them apart for every course created since the default took
+effect, because each of those received the default, or a choice somebody made, when it was
+created. When the default took effect is read from the configuration change log, where core
+records every change made on a settings page; a value set from the command line leaves no record
+there, and then every existing course counts as older than the default. A course that is older
+than the default and was moved back to listed by hand cannot be told from a legacy one, and the
+confirmation says so.
+
+With a listed default there is nothing to apply. The task writes in chunks of 200 courses, one
+transaction each, keeps a state somebody set while it ran, writes nothing if the default was
+changed again before it ran, and fires `course_state_updated` for every course it changes, with
+the administrator who queued it as the user. Running it again changes nothing.
+
 A category's state is written from one page, `local/unlistedcourses/category.php`, reached
 from the category's settings menu (the "More" menu of a category page): core dispatches no
 hook from the category form and has no custom field handler for categories. The page shows
@@ -265,6 +292,9 @@ Under *Site administration > Plugins > Local plugins > Course discoverability*, 
 
 Each offers listed or unlisted; public is never a choice.
 
+Below the first one, a link to the page that applies it to existing courses, described in
+[Applying the default to existing courses](#applying-the-default-to-existing-courses).
+
 ## Capabilities
 
 | Capability | Context | Default | What it allows |
@@ -293,7 +323,9 @@ it. The two settings above are site configuration. Each state change fires an ev
 (`course_state_updated`, `category_state_updated`), which the site's log stores keep under their
 own retention and privacy rules. The plugin stores no files and no user preferences.
 
-The only personal data is `usermodified`, and the Privacy API covers it. A data request exports,
+The only personal data is `usermodified`, and the Privacy API covers it; a row written by the task
+that applies the default to existing courses records the administrator who queued it there, as any
+other change does. A data request exports,
 for every course and category whose state the user last changed, that state and the time of the
 change. A deletion request detaches the user from the row (`usermodified` becomes 0) and leaves
 the state in place: removing the row would un-hide or un-publish a course, or un-hide a category,

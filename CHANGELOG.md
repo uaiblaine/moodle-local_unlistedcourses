@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+Version `2026042008`. No database changes.
+
+### Added
+
+- *Apply the default to existing courses*, linked from the plugin's settings page: gives the
+  default for new courses (`local_unlistedcourses/defaultstate`) to every course created before
+  the default took its current value that has no discoverability state of its own, so a site that
+  has just installed the plugin, or just chosen unlisted as the default, can bring its existing
+  courses into line. Site administrators only, after a confirmation that says how many courses it
+  will change; the page queues an adhoc task and writes nothing itself. The task writes in chunks,
+  never overwrites a stored state, never touches the site home, fires `course_state_updated` for
+  each course it changes, and changes nothing when run again. Privacy is unaffected: the rows it
+  writes are the existing table's, with the administrator in `usermodified`.
+
 ## v5.2-r3 (2026042007) - 2026-10-30
 
 Version `2026042007`: two security fixes from an external audit and a listing probe that reads in
