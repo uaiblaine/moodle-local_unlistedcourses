@@ -449,6 +449,10 @@ class access {
     ): void {
         global $USER;
 
+        if (self::refuses_viewer()) {
+            // The memo is read before viewer_context(), so a visitor or the guest account must never reach it.
+            return;
+        }
         $viewer = (int) $USER->id;
         foreach (array_merge($enrolledcourseids, $pendingcourseids, $scheduledcourseids) as $courseid) {
             self::$related[self::memo_key($viewer, (int) $courseid)] = true;
