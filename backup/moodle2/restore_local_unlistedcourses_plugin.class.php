@@ -82,7 +82,12 @@ class restore_local_unlistedcourses_plugin extends restore_local_plugin {
      */
     public function process_local_unlistedcourses_state($data) {
         $data = (object) $data;
-        $state = (int) $data->state;
+        $raw = isset($data->state) ? trim((string) $data->state) : '';
+        // An empty or non-numeric value is not a state: an int cast would read it as 0, listed.
+        if (!preg_match('/^-?\d+\z/', $raw)) {
+            return;
+        }
+        $state = (int) $raw;
         if (!in_array($state, discoverability::states(), true)) {
             // A value this version does not know is skipped: the target keeps the state it has, or gets the default.
             return;
