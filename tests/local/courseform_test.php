@@ -569,4 +569,100 @@ final class courseform_test extends \advanced_testcase {
         ]);
         $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_state((int) $course->id));
     }
+
+    /**
+     * Give the role new course creators receive the publish capability, as an administrator may.
+     *
+     * @return void
+     */
+    private function let_the_creator_role_publish(): void {
+        global $CFG;
+
+        assign_capability(
+            discoverability::CAPABILITY_PUBLISH,
+            CAP_ALLOW,
+            (int) $CFG->creatornewroleid,
+            \core\context\system::instance()->id,
+            true
+        );
+    }
+
+    /**
+     * A course creator who would publish only through the role they will receive is not offered public.
+     *
+     * create_course() writes the state before course/edit.php gives the creator that role, so
+     * set_state() would refuse the very choice the form offered.
+     *
+     * @return void
+     */
+    public function test_a_course_creator_is_offered_public_only_on_what_they_hold_now(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $context = \core\context\coursecat::instance($category->id);
+        $newcourse = (object) ['category' => $category->id];
+        $creator = $this->getDataGenerator()->create_user();
+        $creatorrole = (int) $DB->get_field('role', 'id', ['shortname' => 'coursecreator']);
+        role_assign($creatorrole, $creator->id, $context->id);
+        $this->let_the_creator_role_publish();
+        $this->setUser($creator);
+
+        $this->assertTrue(
+            guess_if_creator_will_have_course_capability(discoverability::CAPABILITY_PUBLISH, $context),
+            'Precondition: the role they will receive may publish.'
+        );
+        $mform = $this->make_form();
+        courseform::extend($newcourse, $context, $mform);
+        $this->assertSame([0, 1], $this->options($mform), 'Public must not be offered on a capability not yet held.');
+
+        // Control: the same creator holding publish at the category is offered it.
+        assign_capability(discoverability::CAPABILITY_PUBLISH, CAP_ALLOW, $creatorrole, $context->id, true);
+        $mform = $this->make_form();
+        courseform::extend($newcourse, $context, $mform);
+        $this->assertSame([0, 1, 2], $this->options($mform));
+    }
+
+    /**
+     * A new course given public by a user who may not publish yet gets the default, and no exception.
+     *
+     * The course row exists when the hook runs, with no transaction around it: a refusal from
+     * set_state() would leave the course listed whatever the default, and the creator unenrolled.
+     *
+     * @return void
+     */
+    public function test_a_new_course_given_public_by_a_user_who_may_not_publish_gets_the_default(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $context = \core\context\coursecat::instance($category->id);
+        $this->set_creation_default(discoverability::STATE_UNLISTED);
+        $creator = $this->getDataGenerator()->create_user();
+        $creatorrole = (int) $DB->get_field('role', 'id', ['shortname' => 'coursecreator']);
+        role_assign($creatorrole, $creator->id, $context->id);
+        $this->let_the_creator_role_publish();
+        $this->setUser($creator);
+
+        $course = create_course((object) [
+            'fullname' => 'Public by a creator who may not publish yet',
+            'shortname' => 'notyet',
+            'category' => $category->id,
+            courseform::ELEMENT => discoverability::STATE_PUBLIC,
+        ]);
+        $this->assertTrue(
+            discoverability::is_unlisted((int) $course->id),
+            'The refused public must end at the creation default, not listed.'
+        );
+
+        // Control: a creator who holds publish at the category publishes the new course.
+        assign_capability(discoverability::CAPABILITY_PUBLISH, CAP_ALLOW, $creatorrole, $context->id, true);
+        $course = create_course((object) [
+            'fullname' => 'Public by a creator who may publish',
+            'shortname' => 'publisher',
+            'category' => $category->id,
+            courseform::ELEMENT => discoverability::STATE_PUBLIC,
+        ]);
+        $this->assertSame(discoverability::STATE_PUBLIC, discoverability::get_state((int) $course->id));
+    }
 }
