@@ -257,6 +257,30 @@ transaction each, keeps a state somebody set while it ran, writes nothing if the
 changed again before it ran, and fires `course_state_updated` for every course it changes, with
 the administrator who queued it as the user. Running it again changes nothing.
 
+##### Recovering an interrupted backfill
+
+If the process running the task is killed halfway (a container replaced, an out-of-memory kill, a
+node lost), the chunks already committed stay written and the task is left marked as running: its
+row in `task_adhoc` keeps `timestarted` set, with the `hostname` and `pid` of the dead process, and
+`faildelay` stays 0. Cron does not pick the row up again, on the same node or on a fresh one,
+because it only takes rows whose `timestarted` is empty, and core has no timeout that releases it.
+
+To finish it, find the task's id (the `id` of the row whose `classname` is
+`\local_unlistedcourses\task\apply_default_state`, or the "Adhoc task id" line cron prints) and run
+it by hand from the Moodle root, as the web server user:
+
+```sh
+php admin/cli/adhoc_task.php --id=<id>
+```
+
+No `--force` is needed (that option only overrides a disabled cron). The task starts over from the
+beginning, skips every course that already has a state, writes the rest, and removes its own row.
+Running it a second time, or letting the page queue a new task, changes nothing further.
+
+Courses written before the interruption keep their state, but the `course_state_updated` events of
+the chunk that was being logged when the process died may be missing, and the recovery run does not
+fire them again, because those courses already have a row.
+
 A category's state is written from one page, `local/unlistedcourses/category.php`, reached
 from the category's settings menu (the "More" menu of a category page), where the plugin's
 `local_unlistedcourses_extend_settings_navigation()` callback puts it for a holder of
