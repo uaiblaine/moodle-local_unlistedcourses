@@ -315,8 +315,20 @@ every category it did not delete with its state.
 When a category is deleted with its contents moved, its children keep their own states, but the
 deleted category's own unlisted (or public) state stops applying to what it held: the courses and
 subcategories follow the new parent's path from then on, so under a listed parent they are listed.
-The same holds for any move of a course or a category by a holder of `moodle/category:manage`; the
-plugin does not observe moves.
+
+A deletion with its contents moved publishes nothing. A course or category whose own state is
+public is not served to visitors while an unlisted or hidden category is above it; when the move
+takes it under a path that would serve it, nobody who may publish decided that, so the plugin
+takes it back to listed (the usual state-changed event is logged, naming the user who deleted the
+category). Public courses and categories that were already served before the deletion, and those
+the move leaves held back, keep their state. Before the move the plugin only records which public
+states are held back; it acts after core has deleted the category, so a deletion core aborts
+changes no state.
+
+This covers deletion with its contents moved only. Any other move of a course or a category by a
+holder of `moodle/category:manage` (the management page's bulk move, a change of parent) is not
+observed: what is moved follows its new path, and a public state that was held back can start to
+apply.
 
 ## What this plugin does not do
 

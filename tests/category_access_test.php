@@ -867,6 +867,7 @@ final class category_access_test extends \advanced_testcase {
         global $CFG;
 
         $source = file_get_contents($CFG->dirroot . '/local/unlistedcourses/category.php');
+        $idguard = strpos($source, 'category_access::require_category_id($id);');
         $get = strpos($source, 'core_course_category::get($id, MUST_EXIST);');
         $refusal = strpos($source, 'category_access::require_discoverable($id, category_discoverability::CAPABILITY_MANAGE);');
         $named = strpos($source, '$PAGE->set_category_by_id($id);');
@@ -876,5 +877,57 @@ final class category_access_test extends \advanced_testcase {
         $this->assertNotFalse($refusal, 'The page must refuse an undiscoverable category.');
         $this->assertGreaterThan($get, $refusal);
         $this->assertLessThan($named, $refusal);
+        // Core reads id 0 as the top level, so the id is refused before core is asked about it.
+        $this->assertNotFalse($idguard, 'The page must refuse an id that names no category.');
+        $this->assertLessThan($get, $idguard);
+    }
+
+    /**
+     * An id that names no category is refused as core refuses a missing one, before anything reads it.
+     *
+     * Core hands id 0, the top level, to a user who may browse the course list, and the category
+     * context of id 0 has no row: the page then failed on a database error instead of refusing.
+     * The preconditions pin that behaviour of core, so a change of it shows here.
+     *
+     * @return void
+     */
+    public function test_an_id_that_names_no_category_is_refused_as_unknown(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $listed = $generator->create_category();
+        $this->setUser($generator->create_user());
+
+        $this->assertSame(0, (int) \core_course_category::get(0, MUST_EXIST)->id, 'Precondition: core hands the top level over.');
+        try {
+            \core\context\coursecat::instance(0);
+            $this->fail('Precondition: the top level has no category context.');
+        } catch (\dml_missing_record_exception $e) {
+            $this->assertNotSame('unknowncategory', $e->errorcode, 'Precondition: a database error, not the refusal.');
+        }
+
+        foreach ([0, -1] as $id) {
+            $reads = $DB->perf_get_reads();
+            try {
+                category_access::require_category_id($id);
+                $this->fail("Category id {$id} was accepted.");
+            } catch (\moodle_exception $refused) {
+                $this->assertSame($reads, $DB->perf_get_reads(), "Category id {$id} is refused before anything is read.");
+                $this->assertSame('unknowncategory', $refused->errorcode);
+                $this->assertSame(get_string('unknowncategory', 'error', $id), $refused->getMessage());
+            }
+
+            // The page guard refuses it the same way, and not with the missing context.
+            try {
+                category_access::require_discoverable($id, category_discoverability::CAPABILITY_MANAGE);
+                $this->fail("The page guard accepted category id {$id}.");
+            } catch (\moodle_exception $refused) {
+                $this->assertSame('unknowncategory', $refused->errorcode);
+            }
+        }
+
+        // Control: a real category passes both.
+        category_access::require_category_id((int) $listed->id);
+        category_access::require_discoverable((int) $listed->id, category_discoverability::CAPABILITY_MANAGE);
     }
 }

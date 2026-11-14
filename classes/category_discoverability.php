@@ -25,6 +25,7 @@
 namespace local_unlistedcourses;
 
 use local_unlistedcourses\event\category_state_updated;
+use local_unlistedcourses\local\id_chunks;
 use local_unlistedcourses\local\state_lock;
 
 /**
@@ -132,8 +133,9 @@ class category_discoverability {
     /**
      * The state of each of these categories, in the order given.
      *
-     * One query for every id not already known in this request. A category
-     * without a row is listed. A row holding a value outside the known states
+     * One query for every id not already known in this request, and one per
+     * {@see id_chunks::SIZE} of them beyond that. A category without a row is
+     * listed. A row holding a value outside the known states
      * reads as listed too: for a category the safe failure is not blanking the
      * site's tree over a corrupt row.
      *
@@ -152,7 +154,10 @@ class category_discoverability {
             }
         }
         if ($unknown) {
-            $rows = $DB->get_records_list(self::TABLE, 'categoryid', $unknown, '', 'categoryid, state');
+            $rows = id_chunks::read(
+                $unknown,
+                fn(array $chunk): array => $DB->get_records_list(self::TABLE, 'categoryid', $chunk, '', 'categoryid, state')
+            );
             foreach ($unknown as $categoryid) {
                 $state = isset($rows[$categoryid]) ? (int) $rows[$categoryid]->state : self::STATE_DEFAULT;
                 $state = in_array($state, self::states(), true) ? $state : self::STATE_DEFAULT;
@@ -252,12 +257,13 @@ class category_discoverability {
     /**
      * Whether each of these categories may be served to a visitor who is not logged in.
      *
-     * Four statements whatever the size of the list, and every one of them
-     * bounded by the ids the caller asked about or by the paths those ids
-     * carry: the state of the ids, the own row of the candidates, the
+     * Four statements for a list of up to {@see id_chunks::SIZE} ids, and every
+     * one of them bounded by the ids the caller asked about or by the paths those
+     * ids carry: the state of the ids, the own row of the candidates, the
      * visibility of their ancestors, and the memoised unlisted ids. Nothing is
      * read per category, which is what lets a listing ask about a whole page at
-     * once.
+     * once; a longer list pays each of the first three once per chunk of that
+     * size rather than failing on the driver's parameter limit.
      *
      * Non-throwing for an id that is not there. The callers are the anonymous
      * surface, where the id came from a visitor, so a missing category is an
@@ -299,7 +305,10 @@ class category_discoverability {
             /* One statement for the candidates' own rows, and one for the visibility of
                every ancestor they name between them. */
             $rows = $candidates
-                ? $DB->get_records_list('course_categories', 'id', $candidates, '', 'id, path, visible')
+                ? id_chunks::read(
+                    $candidates,
+                    fn(array $chunk): array => $DB->get_records_list('course_categories', 'id', $chunk, '', 'id, path, visible')
+                )
                 : [];
             $visible = self::ancestor_visibility($candidates, $rows);
 
@@ -335,9 +344,9 @@ class category_discoverability {
     /**
      * The visibility of every ancestor named by these categories' paths, in one statement.
      *
-     * The IN list is bounded by the paths of the ids the caller asked about,
-     * never by a population: a category tree is shallow and the callers pass a
-     * page of ids.
+     * The IN list is bounded by the paths of the ids the caller asked about: a
+     * category tree is shallow, so it is about as long as the list of ids, and
+     * chunked like it past {@see id_chunks::SIZE}.
      *
      * @param array $categoryids The categories being asked about.
      * @param array $rows Their own rows, keyed by id, as read from course_categories.
@@ -360,7 +369,10 @@ class category_discoverability {
         if (!$ancestors) {
             return [];
         }
-        return $DB->get_records_list('course_categories', 'id', array_keys($ancestors), '', 'id, visible');
+        return id_chunks::read(
+            array_keys($ancestors),
+            fn(array $chunk): array => $DB->get_records_list('course_categories', 'id', $chunk, '', 'id, visible')
+        );
     }
 
     /**
@@ -422,7 +434,7 @@ class category_discoverability {
      *   the timeout; nothing is written.
      */
     public static function set_state(int $categoryid, int $state, ?int $userid = null): void {
-        global $DB, $USER;
+        global $USER;
 
         if (!in_array($state, self::states(), true)) {
             throw new \coding_exception("Unknown category discoverability state '{$state}'.");
@@ -459,38 +471,103 @@ class category_discoverability {
                 require_capability(self::CAPABILITY_PUBLISH, $context, $userid);
             }
 
-            if ($state === self::STATE_DEFAULT) {
-                $DB->delete_records(self::TABLE, ['categoryid' => $categoryid]);
-            } else if ($row) {
-                $row->state = $state;
-                $row->usermodified = $userid;
-                $row->timemodified = time();
-                $DB->update_record(self::TABLE, $row);
-            } else {
-                $DB->insert_record(self::TABLE, (object) [
-                    'categoryid' => $categoryid,
-                    'state' => $state,
-                    'usermodified' => $userid,
-                    'timemodified' => time(),
-                ]);
-            }
-
-            /* Every answer composed from this state is stale now: the category answers, and
-               the course answers that take the category into account. */
-            self::reset_caches();
-            category_access::reset_caches();
-            access::reset_caches();
-            self::$states[$categoryid] = $state;
-
-            category_state_updated::create([
-                'context' => $context,
-                'objectid' => $categoryid,
-                'userid' => $userid,
-                'other' => ['oldstate' => $current, 'newstate' => $state],
-            ])->trigger();
+            self::write($categoryid, $state, $current, $row, $userid, $context);
         } finally {
             $lock->release();
         }
+    }
+
+    /**
+     * Take back to listed a public category that a category deletion has just made effective.
+     *
+     * For {@see local\delete_move_guard} alone, which calls it when core deleted a category with
+     * its contents moved and the move, not a decision of somebody holding
+     * local/unlistedcourses:publishcategory, is what lets this category be served anonymously:
+     * it was public in its own row and inert before the deletion, and is effective after it. No
+     * capability is asked because nothing is published here: the category goes from public to
+     * listed, a restriction, under the deleting user's moodle/category:manage. It cannot be used
+     * for any other transition.
+     *
+     * The row is read again under the category's lock, as {@see set_state()} reads it, and a
+     * category that is no longer public there is left alone. The write is set_state()'s own, so
+     * {@see category_state_updated} fires and every request cache is reset.
+     *
+     * @param int $categoryid The category id.
+     * @param int $userid The user who deleted the category above it, named in the event.
+     * @return void
+     * @throws \local_unlistedcourses\local\state_busy_exception When another writer of this category holds its lock past
+     *   the timeout; nothing is written.
+     */
+    public static function unpublish_after_move(int $categoryid, int $userid): void {
+        $context = \core\context\coursecat::instance($categoryid, IGNORE_MISSING);
+        if (!$context) {
+            return;
+        }
+
+        $lock = state_lock::category($categoryid);
+        try {
+            [$row, $current] = self::read_row($categoryid);
+            if ($current !== self::STATE_PUBLIC) {
+                return;
+            }
+            self::write($categoryid, self::STATE_DEFAULT, $current, $row, $userid, $context);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /**
+     * Write a decided change of state, reset the caches and fire the event.
+     *
+     * The caller holds the category's lock and has decided the change on the row it read under it.
+     *
+     * @param int $categoryid The category id.
+     * @param int $state The new state.
+     * @param int $current The state the row held, read under the lock.
+     * @param \stdClass|false $row The row read under the lock, false when there was none.
+     * @param int $userid The user performing the change.
+     * @param \core\context\coursecat $context The category context.
+     * @return void
+     */
+    private static function write(
+        int $categoryid,
+        int $state,
+        int $current,
+        \stdClass|false $row,
+        int $userid,
+        \core\context\coursecat $context
+    ): void {
+        global $DB;
+
+        if ($state === self::STATE_DEFAULT) {
+            $DB->delete_records(self::TABLE, ['categoryid' => $categoryid]);
+        } else if ($row) {
+            $row->state = $state;
+            $row->usermodified = $userid;
+            $row->timemodified = time();
+            $DB->update_record(self::TABLE, $row);
+        } else {
+            $DB->insert_record(self::TABLE, (object) [
+                'categoryid' => $categoryid,
+                'state' => $state,
+                'usermodified' => $userid,
+                'timemodified' => time(),
+            ]);
+        }
+
+        /* Every answer composed from this state is stale now: the category answers, and
+           the course answers that take the category into account. */
+        self::reset_caches();
+        category_access::reset_caches();
+        access::reset_caches();
+        self::$states[$categoryid] = $state;
+
+        category_state_updated::create([
+            'context' => $context,
+            'objectid' => $categoryid,
+            'userid' => $userid,
+            'other' => ['oldstate' => $current, 'newstate' => $state],
+        ])->trigger();
     }
 
     /**
@@ -517,7 +594,8 @@ class category_discoverability {
      * and core's own deletion is the audited act. Nothing here walks the
      * subtree: core_course_category::delete_full() deletes each descendant
      * through its own delete_full() call, which fires the event again, and
-     * delete_move() moves the children, which keep their state.
+     * delete_move() moves the children, which keep their state unless the move
+     * made a public one effective ({@see local\delete_move_guard}).
      *
      * @param int $categoryid The category id.
      * @return void

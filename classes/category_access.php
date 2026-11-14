@@ -75,7 +75,9 @@ namespace local_unlistedcourses;
  * category, because setUser() and "log in as" change the answer inside one
  * request.
  *
- * The budget is four statements per request, whatever the size of the listing:
+ * The budget is four statements per request for a listing of up to
+ * {@see local\id_chunks::SIZE} categories (a longer one pays the paths
+ * statement once per chunk of that size):
  * one for the unlisted ids, one for the paths the caller did not already
  * carry, one for the viewer's cohorts and one for the viewer's category roles.
  * When nothing is unlisted it is one, and the same one for a site admin and
@@ -123,6 +125,26 @@ class category_access {
     }
 
     /**
+     * Refuse an id that cannot name a category, the way core refuses an id with no row.
+     *
+     * core_course_category::get() reads id 0 as the top level, which is no category: it hands
+     * that pseudo-category to anybody who may browse the course list, and the category context a
+     * page then asks for has no row, so \core\context\coursecat::instance(0) throws a database
+     * error instead of the page's refusal. A negative id has no row either. Both are refused here
+     * with what get() throws for a missing id, before anything is read for them; a page about one
+     * category calls this before it asks core.
+     *
+     * @param int $categoryid The category id a request named.
+     * @return void
+     * @throws \moodle_exception unknowncategory, when the id is not positive.
+     */
+    public static function require_category_id(int $categoryid): void {
+        if ($categoryid <= 0) {
+            throw new \moodle_exception('unknowncategory', a: $categoryid);
+        }
+    }
+
+    /**
      * Refuse a page about this category, as though it did not exist, to a viewer who may not discover it.
      *
      * An unlisted category keeps visible = 1, so core_course_category::get() hands it to any
@@ -135,12 +157,15 @@ class category_access {
      * capability granted at the system context is no relationship with the category
      * ({@see role_term()} reads no system assignment), yet it must still reach the page it grants.
      *
+     * An id that cannot name a category is refused first, by {@see require_category_id()}.
+     *
      * @param int $categoryid The category id.
      * @param string $unless A capability that admits the viewer on its own.
      * @return void
-     * @throws \moodle_exception unknowncategory, when the viewer may not discover the category.
+     * @throws \moodle_exception unknowncategory, when the id names no category or the viewer may not discover it.
      */
     public static function require_discoverable(int $categoryid, string $unless): void {
+        self::require_category_id($categoryid);
         if (has_capability($unless, \core\context\coursecat::instance($categoryid))) {
             return;
         }
@@ -297,8 +322,10 @@ class category_access {
     /**
      * Read the stored path of every category whose path the caller did not carry.
      *
-     * One query for all of them. A category with no row keeps an empty path,
-     * which {@see path_ids()} turns into no ids and the caller into a refusal.
+     * One query for all of them, one per {@see local\id_chunks::SIZE} beyond that
+     * so a list of any length stays under the driver's parameter limit. A
+     * category with no row keeps an empty path, which {@see path_ids()} turns
+     * into no ids and the caller into a refusal.
      *
      * @param array $paths Map of categoryid => stored path or null.
      * @return array The same map with every null replaced by a path, possibly the empty one.
@@ -313,7 +340,10 @@ class category_access {
             }
         }
         if ($missing) {
-            $rows = $DB->get_records_list('course_categories', 'id', $missing, '', 'id, path');
+            $rows = local\id_chunks::read(
+                $missing,
+                fn(array $chunk): array => $DB->get_records_list('course_categories', 'id', $chunk, '', 'id, path')
+            );
             foreach ($missing as $categoryid) {
                 $paths[$categoryid] = isset($rows[$categoryid]) ? (string) $rows[$categoryid]->path : '';
             }

@@ -649,7 +649,7 @@ final class discoverability_test extends \advanced_testcase {
         $this->assertContains((int) $broken->id, array_map('intval', $notunlisted), 'Inequality admits the unknown value.');
 
         // The aliases are interpolated into SQL, so anything but an identifier is refused.
-        foreach (['c d', 'c;', 'C', '1c', ''] as $bad) {
+        foreach (['c d', 'c;', 'C', '1c', '', "c\n"] as $bad) {
             try {
                 discoverability::state_sql($bad);
                 $this->fail("Alias '{$bad}' was accepted.");
@@ -657,6 +657,15 @@ final class discoverability_test extends \advanced_testcase {
                 $this->assertStringContainsString('identifier', $e->getMessage());
             }
         }
+        // A trailing newline is the one a "$" anchor lets through, so the second alias is tried with it too.
+        try {
+            discoverability::state_sql('c', "lus\n");
+            $this->fail('An alias ending in a newline was accepted.');
+        } catch (\coding_exception $e) {
+            $this->assertStringContainsString('identifier', $e->getMessage());
+        }
+        // Control: the same two names without the newline are accepted.
+        $this->assertStringContainsString('LEFT JOIN', discoverability::state_sql('c', 'lus')['join']);
         $this->expectException(\coding_exception::class);
         discoverability::state_sql('c', 'c');
     }
