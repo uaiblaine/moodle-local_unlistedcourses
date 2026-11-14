@@ -444,7 +444,7 @@ final class category_discoverability_test extends \advanced_testcase {
      */
     public function test_a_deletion_core_aborts_keeps_the_states(): void {
         global $CFG, $DB;
-        require_once($CFG->dirroot . '/backup/backup.class.php');
+        require_once($CFG->dirroot . '/backup/util/includes/backup_includes.php');
         $this->resetAfterTest();
         $generator = $this->getDataGenerator();
         $this->setAdminUser();

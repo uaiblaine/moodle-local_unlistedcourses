@@ -38,10 +38,13 @@ $id = required_param('id', PARAM_INT);
 
 require_login();
 
-/* Both checks run before set_category_by_id(), which reads the raw record and checks
-   nothing. get() refuses a missing or hidden category; it hands an unlisted one, which
-   stays visible, to anybody logged in, so require_discoverable() refuses that one the
-   way get() refuses a missing id, before the capability check below can tell them apart. */
+/* Every check runs before set_category_by_id(), which reads the raw record and checks
+   nothing. get() reads id 0 as the top level, which is no category, so an id that cannot
+   name one is refused first, as a missing one is. get() refuses a missing or hidden
+   category; it hands an unlisted one, which stays visible, to anybody logged in, so
+   require_discoverable() refuses that one the way get() refuses a missing id, before the
+   capability check below can tell them apart. */
+category_access::require_category_id($id);
 $category = core_course_category::get($id, MUST_EXIST);
 $context = \core\context\coursecat::instance($id);
 category_access::require_discoverable($id, category_discoverability::CAPABILITY_MANAGE);
