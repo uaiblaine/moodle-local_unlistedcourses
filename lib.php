@@ -19,8 +19,9 @@
  *
  * Only the callbacks that have no hook equivalent live here. Course and
  * category deletion go through the course_deleted and course_category_deleted
- * events (db/events.php), never through the pre-delete callbacks: core runs
- * those before the deletion is certain ({@see \local_unlistedcourses\observer}).
+ * events (db/events.php): core runs the pre-delete callbacks before the deletion
+ * is certain ({@see \local_unlistedcourses\observer}), so the one of them
+ * implemented here only reads.
  *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine
@@ -28,6 +29,7 @@
  */
 
 use local_unlistedcourses\category_discoverability;
+use local_unlistedcourses\local\delete_move_guard;
 
 /**
  * Put the category discoverability page in a course category's settings menu.
@@ -69,4 +71,22 @@ function local_unlistedcourses_extend_settings_navigation(settings_navigation $s
         'unlistedcoursescatstate',
         new pix_icon('i/hide', '')
     );
+}
+
+/**
+ * Record, before core deletes a category and moves its contents, which public rows below it are inert.
+ *
+ * Reads only: core can still abort the deletion after this runs, and a state written here would
+ * then be wrong for a category that still exists. The course_category_deleted observer settles
+ * what is recorded once the category is gone ({@see delete_move_guard}).
+ *
+ * @param core_course_category $category The category being deleted.
+ * @param core_course_category $newparent The category its contents move to.
+ * @return void
+ */
+function local_unlistedcourses_pre_course_category_delete_move(
+    core_course_category $category,
+    core_course_category $newparent
+): void {
+    delete_move_guard::record($category);
 }

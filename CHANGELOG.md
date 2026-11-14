@@ -6,8 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-Version `2026100509`: the fixes of the 2026-11-13 audit. `db/events.php` gains an observer, so the
-version is bumped; no database changes.
+Versions `2026100509` and `2026100510`: the fixes of the 2026-11-13 audit (`db/events.php` gains
+an observer) and the notes the 2026-11-04 security review left open (`lib.php` gains the
+`pre_course_category_delete_move` callback); no database changes.
+
+### Security
+
+- Deleting a category with its contents moved publishes nothing. A course or category whose own
+  state is public but which an unlisted or hidden category above it held back was served to
+  visitors as soon as the move put it under a path that serves it, though nobody who may publish
+  decided that. The plugin now records, before core moves the contents and without writing, which
+  public states below the category are held back, and once the category is deleted takes back to
+  listed each of them the move made effective, logging the usual state-changed event under the
+  deleting user. States that were effective before, and those the move leaves held back, are
+  untouched; a deletion core aborts changes nothing. Any other move is still not observed.
+- `category.php?id=0` (and any id below 1) is refused as an unknown category before anything is
+  read. Core hands id 0 over as the top level, and the page then ended on a database error over
+  the missing category context instead of its own refusal; `category_access::require_discoverable()`
+  refuses such an id the same way.
+- The alias check of `discoverability::state_sql()` anchors the end with `\z`: `$` also matched
+  before a final newline, so an alias ending in one passed the identifier test.
+- A list of course or category ids longer than a database driver takes (PostgreSQL refuses more
+  than 65,535 bind parameters in one statement) is read in chunks of 20,000 ids
+  (`local\id_chunks`) by `get_states()`, `are_public()`, `filter_courses()`,
+  `filter_courses_public()`, `filter_categories()`, `are_categories_discoverable()` and
+  `get_next_actions()`, where it failed. A list up to that size costs exactly the statements it
+  cost before.
 
 ### Fixed
 

@@ -61,6 +61,12 @@ class observer {
      * the recursive call of each descendant, so nothing here walks the subtree; delete_move()
      * fires it for the deleted category alone, whose children keep their own rows.
      *
+     * Then, for a delete_move(), what the move made public goes back to listed: the public rows
+     * below the category that local_unlistedcourses_pre_course_category_delete_move() recorded
+     * as inert, asked again now that the category's own row is gone and the caches are reset
+     * ({@see local\delete_move_guard}). This is the first moment the deletion is certain, which
+     * is why the callback only reads.
+     *
      * Registered as internal in db/events.php, like {@see course_deleted()}: it runs at once,
      * inside the deletion's transaction when a caller opened one (core_course_delete_categories
      * does), so the row and the caches go in the same unit of work as the category and roll back
@@ -71,6 +77,10 @@ class observer {
      * @return void
      */
     public static function course_category_deleted(\core\event\course_category_deleted $event): void {
-        category_discoverability::on_category_deleted((int) $event->objectid);
+        $categoryid = (int) $event->objectid;
+        category_discoverability::on_category_deleted($categoryid);
+        // A deletion that moved the contents names their new parent; delete_full() does not.
+        $moved = isset($event->other['contentmovedcategoryid']);
+        local\delete_move_guard::settle($categoryid, $moved, (int) $event->userid);
     }
 }
