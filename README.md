@@ -17,6 +17,47 @@ The component name is narrower than its scope. It was born as "unlisted courses"
 owns "public" too; renaming a Moodle component means uninstall, reinstall and losing the
 data, so the name stays and the user-facing strings talk about discoverability.
 
+## Screenshots
+
+*Moodle 5.3 with the Dimensions theme and demo data: a "Professional development" category
+with four courses (two listed, one public, one unlisted) and an unlisted "Leadership programme
+2027" subcategory whose cohort is defined at that category. The site's default for new and
+restored courses is Unlisted.*
+
+![The course settings form of Negotiation for team leads: the Discoverability field, set to Unlisted, between Course visibility and Course start date](docs/screenshots/course-settings.png)
+
+The Discoverability field sits in the course form's General section, for whoever may change
+the course's visibility; Public is offered only to someone allowed to publish.
+
+![The category discoverability page of Leadership programme 2027: the Discoverability select set to Unlisted, and the preview naming the cohort defined at the category with its four members, the two role holders and the six people who still see the category](docs/screenshots/category-state.png)
+
+A category's state is set on a page of its own in the category's navigation, with a preview of
+who still sees the category while it is unlisted.
+
+![The plugin's settings page: Default discoverability for new courses and Discoverability of a restored course whose backup has none, both set to Unlisted, with the link to apply the default to existing courses](docs/screenshots/settings.png)
+
+The two defaults, and the link to apply the default to the courses that predate it.
+
+![The Apply the default to existing courses page: a confirmation that two courses created before the date the default became Unlisted have no discoverability of their own and will become Unlisted in a background task](docs/screenshots/apply-default.png)
+
+Applying the default counts the courses it would reach and asks before it queues anything.
+
+<table>
+<tr>
+<td valign="top" width="50%"><img src="docs/screenshots/category-not-enrolled.png" alt="The Professional development category seen by a learner enrolled in one of its courses only: three courses, no Negotiation for team leads and no Leadership programme 2027 subcategory"></td>
+<td valign="top" width="50%"><img src="docs/screenshots/category-enrolled.png" alt="The same category seen by a learner enrolled in Negotiation for team leads and a member of the programme's cohort: the Leadership programme 2027 subcategory and four courses, Negotiation for team leads among them"></td>
+</tr>
+</table>
+
+The same category page for two learners: the unlisted course and the unlisted subcategory are
+named only to the one who is enrolled in the course and belongs to the programme's cohort.
+
+![The generic This content is not available page shown to the learner who is not enrolled when they open the unlisted course's address](docs/screenshots/direct-link-not-enrolled.png)
+
+With the Dimensions theme, a learner who may not discover the unlisted course and opens its
+address gets the same "not available" page as a course that does not exist; without the theme,
+the course's own rules apply.
+
 ## The API
 
 `\local_unlistedcourses\discoverability`:
