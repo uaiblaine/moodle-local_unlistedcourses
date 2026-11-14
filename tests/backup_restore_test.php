@@ -335,6 +335,53 @@ final class backup_restore_test extends \advanced_testcase {
     }
 
     /**
+     * A restore whose state write finds the course's lock held completes, and leaves the state alone.
+     *
+     * The lock factory is the fixture state_lock_test uses, holding the target course's lock as
+     * another writer would. Every other lock the restore asks for is granted at once.
+     *
+     * @return void
+     */
+    public function test_a_restore_that_finds_the_state_busy_completes_and_leaves_it(): void {
+        global $CFG;
+
+        require_once($CFG->dirroot . '/local/unlistedcourses/tests/fixtures/state_lock_factory.php');
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $target = $generator->create_course();
+        $listedsource = $generator->create_course(['category' => $target->category]);
+        $this->setAdminUser();
+        discoverability::set_state((int) $target->id, discoverability::STATE_UNLISTED);
+
+        $CFG->lock_factory = '\\' . fixtures\state_lock_factory::class;
+        fixtures\state_lock_factory::reset();
+        fixtures\state_lock_factory::$held = ['course_' . $target->id];
+        $sink = $this->redirectEvents();
+
+        $this->restore_over($listedsource, (int) $target->id, (int) get_admin()->id, true);
+
+        $this->assertContains(
+            'timeout:course_' . $target->id,
+            fixtures\state_lock_factory::$log,
+            'Precondition: the write met the lock.'
+        );
+        $this->assertTrue(discoverability::is_unlisted((int) $target->id), 'A busy state must be left as it was.');
+        $this->assertStringContainsString(get_string('restore_statebusy', 'local_unlistedcourses'), $this->restore_log());
+        $updates = array_filter($sink->get_events(), static fn($event) => $event instanceof event\course_state_updated);
+        $this->assertCount(0, $updates, 'Nothing was written, so nothing is announced.');
+
+        // Control: with the lock free, the same restore resets the state to listed, like every other setting.
+        fixtures\state_lock_factory::reset();
+        $this->restore_over($listedsource, (int) $target->id, (int) get_admin()->id, true);
+        $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_state((int) $target->id));
+        $this->assertStringNotContainsString(get_string('restore_statebusy', 'local_unlistedcourses'), $this->restore_log());
+        $updates = array_filter($sink->get_events(), static fn($event) => $event instanceof event\course_state_updated);
+        $this->assertCount(1, $updates);
+        $sink->close();
+        fixtures\state_lock_factory::reset();
+    }
+
+    /**
      * The backup carries the element for a listed course too, which is what lets an overwrite reset the state.
      *
      * @return void

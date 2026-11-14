@@ -24,9 +24,17 @@
 
 defined('MOODLE_INTERNAL') || die();
 
+/* Both internal, the default spelled out: each runs inside the deletion's transaction when a
+   caller opened one, so the row goes, or stays, with the course or category it belongs to. */
 $observers = [
     [
         'eventname' => '\\core\\event\\course_deleted',
         'callback' => '\\local_unlistedcourses\\observer::course_deleted',
+        'internal' => true,
+    ],
+    [
+        'eventname' => '\\core\\event\\course_category_deleted',
+        'callback' => '\\local_unlistedcourses\\observer::course_category_deleted',
+        'internal' => true,
     ],
 ];

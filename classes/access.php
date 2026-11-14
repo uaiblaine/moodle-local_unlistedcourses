@@ -310,7 +310,10 @@ class access {
      * Accepts anything with an ->id, which covers both the stdClass records
      * and the core_course_list_element objects the course renderer passes
      * around, and preserves the incoming keys so a caller can keep paginating
-     * with them.
+     * with them. An item's ->category is trusted when it carries one, so it
+     * must come from a record read in the current request: an item kept across
+     * a move answers for its old category. {@see filter_courses_public()} reads
+     * nothing off the item, the stricter rule an anonymous page needs.
      *
      * This is the one place the category term applies. A course whose category
      * is effectively unlisted is withheld here even when the course itself is
@@ -1157,8 +1160,13 @@ class access {
         }
 
         if ($instance->enrol === 'coursecompleted') {
-            // The prerequisite is the course the instance names (customint1); only a viewer
-            // working towards it is promised this one.
+            /* The prerequisite is the course the instance names (customint1); only a viewer
+               working towards it is promised this one. The site course is no prerequisite:
+               is_enrolled() is true there for every logged-in user, nobody completes it, and
+               the batch, which reads real enrolment rows, already answers null for it. */
+            if ((int) $instance->customint1 === (int) SITEID) {
+                return null;
+            }
             $prerequisite = \core\context\course::instance((int) $instance->customint1, IGNORE_MISSING);
             if (!$prerequisite || !is_enrolled($prerequisite, $USER, '', true)) {
                 return null;

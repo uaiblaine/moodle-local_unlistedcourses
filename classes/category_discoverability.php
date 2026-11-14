@@ -25,6 +25,7 @@
 namespace local_unlistedcourses;
 
 use local_unlistedcourses\event\category_state_updated;
+use local_unlistedcourses\local\state_lock;
 
 /**
  * The discoverability state of a course category: who may learn that it exists.
@@ -405,8 +406,10 @@ class category_discoverability {
      * The capability boundary: the manage capability on every change, and the
      * publish capability as well on a change that enters or leaves the public
      * state - see the class docblock. A call that does not change the state
-     * returns without checking anything and fires nothing. Every change fires
-     * {@see category_state_updated}.
+     * returns without checking anything, without a lock, and fires nothing. A
+     * change is read again, decided and written under the category's lock
+     * ({@see local\state_lock}), so two writers never decide on the same stale
+     * row. Every change fires {@see category_state_updated}.
      *
      * @param int $categoryid The category id. Not the top level, which has no row to hold a state.
      * @param int $state One of the state constants.
@@ -415,6 +418,8 @@ class category_discoverability {
      * @throws \coding_exception On an unknown state or the top level.
      * @throws \required_capability_exception When the user may not manage the state of this category, or when the
      *   change enters or leaves the public state and the user may not publish categories here.
+     * @throws \local_unlistedcourses\local\state_busy_exception When another writer of this category holds its lock past
+     *   the timeout; nothing is written.
      */
     public static function set_state(int $categoryid, int $state, ?int $userid = null): void {
         global $DB, $USER;
@@ -429,65 +434,90 @@ class category_discoverability {
         $context = \core\context\coursecat::instance($categoryid);
         $userid = $userid ?? (int) $USER->id;
 
-        $row = $DB->get_record(self::TABLE, ['categoryid' => $categoryid]);
-        $current = $row ? (int) $row->state : self::STATE_DEFAULT;
-        $current = in_array($current, self::states(), true) ? $current : self::STATE_DEFAULT;
+        // Lock-free first: a save that changes nothing takes no lock, as it checks no capability.
+        [, $current] = self::read_row($categoryid);
         if ($current === $state) {
             self::$states[$categoryid] = $state;
             return;
         }
 
-        require_capability(self::CAPABILITY_MANAGE, $context, $userid);
+        $lock = state_lock::category($categoryid);
+        try {
+            // Read again under the lock: both capability decisions and the write are about this row.
+            [$row, $current] = self::read_row($categoryid);
+            if ($current === $state) {
+                self::$states[$categoryid] = $state;
+                return;
+            }
 
-        /* Entering or leaving the public state is a second decision on top of the first,
-           and it carries its own capability: publishing a category to the internet is not
-           an editing act, and un-publishing one is that same decision reversed. */
-        if ($current === self::STATE_PUBLIC || $state === self::STATE_PUBLIC) {
-            require_capability(self::CAPABILITY_PUBLISH, $context, $userid);
+            require_capability(self::CAPABILITY_MANAGE, $context, $userid);
+
+            /* Entering or leaving the public state is a second decision on top of the first,
+               and it carries its own capability: publishing a category to the internet is not
+               an editing act, and un-publishing one is that same decision reversed. */
+            if ($current === self::STATE_PUBLIC || $state === self::STATE_PUBLIC) {
+                require_capability(self::CAPABILITY_PUBLISH, $context, $userid);
+            }
+
+            if ($state === self::STATE_DEFAULT) {
+                $DB->delete_records(self::TABLE, ['categoryid' => $categoryid]);
+            } else if ($row) {
+                $row->state = $state;
+                $row->usermodified = $userid;
+                $row->timemodified = time();
+                $DB->update_record(self::TABLE, $row);
+            } else {
+                $DB->insert_record(self::TABLE, (object) [
+                    'categoryid' => $categoryid,
+                    'state' => $state,
+                    'usermodified' => $userid,
+                    'timemodified' => time(),
+                ]);
+            }
+
+            /* Every answer composed from this state is stale now: the category answers, and
+               the course answers that take the category into account. */
+            self::reset_caches();
+            category_access::reset_caches();
+            access::reset_caches();
+            self::$states[$categoryid] = $state;
+
+            category_state_updated::create([
+                'context' => $context,
+                'objectid' => $categoryid,
+                'userid' => $userid,
+                'other' => ['oldstate' => $current, 'newstate' => $state],
+            ])->trigger();
+        } finally {
+            $lock->release();
         }
-
-        if ($state === self::STATE_DEFAULT) {
-            $DB->delete_records(self::TABLE, ['categoryid' => $categoryid]);
-        } else if ($row) {
-            $row->state = $state;
-            $row->usermodified = $userid;
-            $row->timemodified = time();
-            $DB->update_record(self::TABLE, $row);
-        } else {
-            $DB->insert_record(self::TABLE, (object) [
-                'categoryid' => $categoryid,
-                'state' => $state,
-                'usermodified' => $userid,
-                'timemodified' => time(),
-            ]);
-        }
-
-        /* Every answer composed from this state is stale now: the category answers, and
-           the course answers that take the category into account. */
-        self::reset_caches();
-        category_access::reset_caches();
-        access::reset_caches();
-        self::$states[$categoryid] = $state;
-
-        category_state_updated::create([
-            'context' => $context,
-            'objectid' => $categoryid,
-            'userid' => $userid,
-            'other' => ['oldstate' => $current, 'newstate' => $state],
-        ])->trigger();
     }
 
     /**
-     * Drop the state of a category that is being deleted.
+     * The stored row of a category and the state it holds, an unknown value read as listed.
      *
-     * Called from the pre_course_category_delete and
-     * pre_course_category_delete_move plugin callbacks in lib.php, which core
-     * invokes before the row disappears. No capability and no event: the
-     * category is going away, and core's own deletion is the audited act.
-     * Nothing here walks the subtree: core_course_category::delete_full()
-     * deletes each descendant through its own delete_full() call, which invokes
-     * the callback again, and delete_move() moves the children, which keep
-     * their state.
+     * @param int $categoryid The category id.
+     * @return array The row or false, then the state constant.
+     */
+    private static function read_row(int $categoryid): array {
+        global $DB;
+
+        $row = $DB->get_record(self::TABLE, ['categoryid' => $categoryid]);
+        $current = $row ? (int) $row->state : self::STATE_DEFAULT;
+        $current = in_array($current, self::states(), true) ? $current : self::STATE_DEFAULT;
+        return [$row, $current];
+    }
+
+    /**
+     * Drop the state of a category core has deleted.
+     *
+     * Called from the course_category_deleted observer,
+     * {@see observer::course_category_deleted()}, which says why it is not the
+     * pre-delete callbacks. No capability and no event: the category is gone,
+     * and core's own deletion is the audited act. Nothing here walks the
+     * subtree: core_course_category::delete_full() deletes each descendant
+     * through its own delete_full() call, which fires the event again, and
+     * delete_move() moves the children, which keep their state.
      *
      * @param int $categoryid The category id.
      * @return void

@@ -781,6 +781,10 @@ final class next_action_test extends \advanced_testcase {
             $make('course completed with no tie', [access::NEXT_NONE, [], null, null, null], function ($c) use ($unrelated) {
                 $this->add_instance($c, 'coursecompleted', ['customint1' => $unrelated->id]);
             });
+            // The site course: is_enrolled() is true there for everybody, but nobody completes it.
+            $make('course completed after the site course', [access::NEXT_NONE, [], null, null, null], function ($c) {
+                $this->add_instance($c, 'coursecompleted', ['customint1' => SITEID]);
+            });
             $make('course completed window closed', $blocked(access::BLOCKED_WINDOW), function ($c) use ($prerequisite, $now) {
                 $this->add_instance($c, 'coursecompleted', ['customint1' => $prerequisite->id, 'enrolenddate' => $now - 9]);
             });

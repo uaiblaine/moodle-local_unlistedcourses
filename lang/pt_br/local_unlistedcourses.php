@@ -45,6 +45,7 @@ $string['categorystate_help'] = 'Quem pode saber que esta categoria existe.
 
 Isto é uma regra de listagem, não uma permissão. Esconde a categoria das páginas que este site renderiza; serviços web, o aplicativo móvel, o bloco de Navegação e os menus inteligentes de lista de cursos continuam nomeando-a, e um link direto para um curso continua seguindo as regras do próprio curso. Coortes criadas no nível do site não contam, e a coorte à qual um método de inscrição restringe as inscrições também não: só uma coorte definida nesta categoria, ou um papel atribuído aqui, abre a categoria.';
 $string['categorystate_saved'] = 'Descobribilidade da categoria salva';
+$string['categorystate_stale'] = 'Nada foi salvo: o valor enviado não está entre as opções que esta categoria oferece agora, em geral porque alguém alterou a descobribilidade dela desde que a página foi exibida. Revise o estado atual e salve de novo.';
 $string['defaultstate'] = 'Descobribilidade padrão de cursos novos';
 $string['defaultstate_desc'] = 'A descobribilidade que um curso novo recebe quando quem o cria não escolhe uma. É o valor inicial do campo Descobribilidade no formulário do curso e o estado dado a um curso criado por serviço web, por envio de CSV, pela aprovação de um pedido de curso ou por qualquer outro caminho que não preencha esse campo. O valor escolhido no formulário do curso sempre prevalece. Público não está entre as opções: publicar um curso exige a permissão de publicar cursos de quem o cria. Uma alteração vale só para os cursos criados depois dela.';
 $string['event_category_state_updated'] = 'Estado de descobribilidade da categoria de curso atualizado';
@@ -77,6 +78,7 @@ $string['privacy:metadata:local_unlistedcourses_state:state'] = 'O estado: lista
 $string['privacy:metadata:local_unlistedcourses_state:timemodified'] = 'Quando o estado foi alterado pela última vez.';
 $string['privacy:metadata:local_unlistedcourses_state:usermodified'] = 'O usuário que alterou o estado pela última vez.';
 $string['restore_publicclamped'] = 'O curso era público no backup, mas quem o está restaurando não pode publicar cursos aqui. O estado público não foi aplicado.';
+$string['restore_statebusy'] = 'O estado de descobribilidade do backup não foi aplicado: outra pessoa estava alterando a descobribilidade do curso de destino ao mesmo tempo. O curso mantém a descobribilidade que tem.';
 $string['restore_statenotapplied'] = 'O estado de descobribilidade do backup não foi aplicado: quem o está restaurando não pode alterar o estado do curso de destino.';
 $string['restoredefaultstate'] = 'Descobribilidade de curso restaurado de backup sem esse dado';
 $string['restoredefaultstate_desc'] = 'A descobribilidade que um curso recebe quando um backup é restaurado como curso novo e não traz descobribilidade, como acontece com um backup feito em um site sem este plugin. Um backup cujo valor esta versão aplica o mantém; um cujo valor é desconhecido aqui, ou é público e foi recusado a quem restaura, também recebe o padrão. Uma restauração em um curso existente deixa o estado desse curso como está. Um curso criado por envio de CSV a partir de um backup modelo é criado antes da restauração, por isso recebe o padrão de cursos novos.';
@@ -89,6 +91,7 @@ $string['state_help'] = 'Quem pode saber que este curso existe.
 * **Público**: além de listado, a página de apresentação do curso pode ser lida por visitantes não autenticados, de modo que um link compartilhado mostra uma prévia em aplicativos de mensagem e redes sociais. Só um usuário autorizado a publicar cursos pode marcar ou desmarcar isto. Um curso oculto, ou dentro de uma categoria oculta, nunca é público, diga o que disser esta opção. Se o curso não tem página de apresentação configurada, esta opção não produz efeito visível até que tenha.';
 $string['state_public'] = 'Público';
 $string['state_unlisted'] = 'Não listado';
+$string['statebusy'] = 'A descobribilidade não foi salva: outra pessoa estava alterando a descobribilidade deste curso ou desta categoria ao mesmo tempo. Tente de novo em instantes.';
 $string['unlistedcourses:managecategorystate'] = 'Alterar o estado de descobribilidade de uma categoria de curso';
 $string['unlistedcourses:publish'] = 'Publicar um curso para visitantes não autenticados';
 $string['unlistedcourses:publishcategory'] = 'Publicar uma categoria de curso para visitantes não autenticados';
