@@ -47,4 +47,31 @@ class observer {
     public static function course_deleted(\core\event\course_deleted $event): void {
         discoverability::on_course_deleted((int) $event->objectid);
     }
+
+    /**
+     * Drop the state row of a course category core has deleted.
+     *
+     * The event, not the pre_course_category_delete and pre_course_category_delete_move
+     * callbacks: core runs those first thing, and the deletion can still fail after them -
+     * delete_full() throws when the deletion of a course in the subtree throws (a plugin's
+     * pre_course_delete callback or before_course_deleted hook, say) and delete_move() can return
+     * false. A row dropped there would leave a live category, and with delete_full() each of its
+     * ancestors, without its state: an unlisted one would list itself and its courses again.
+     * course_category_deleted fires once per category, after its row and context are gone.
+     * delete_full() fires it from the recursive call of each descendant, so nothing here walks
+     * the subtree; delete_move() fires it for the deleted category alone, whose children keep
+     * their own rows.
+     *
+     * Registered as internal in db/events.php, like {@see course_deleted()}: it runs at once,
+     * inside the deletion's transaction when a caller opened one (core_course_delete_categories
+     * does), so the row and the caches go in the same unit of work as the category and roll back
+     * with it. An external observer would wait for the commit and run outside it, and a failure
+     * then would leave the row behind.
+     *
+     * @param \core\event\course_category_deleted $event The event.
+     * @return void
+     */
+    public static function course_category_deleted(\core\event\course_category_deleted $event): void {
+        category_discoverability::on_category_deleted((int) $event->objectid);
+    }
 }

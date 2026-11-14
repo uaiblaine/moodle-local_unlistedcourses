@@ -26,8 +26,8 @@ use PHPUnit\Framework\Attributes\CoversClass;
  * somebody who may make it, and every "still in state X" assertion follows a
  * refused attempt to leave it - so a gate that stopped gating would be seen.
  * The deletion tests go through core's own delete_full() and delete_move(),
- * so what they prove is the wiring of the lib.php callbacks, not the cleanup
- * method on its own.
+ * so what they prove is the wiring of the course_category_deleted observer,
+ * not the cleanup method on its own.
  *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine
@@ -35,6 +35,7 @@ use PHPUnit\Framework\Attributes\CoversClass;
  */
 #[CoversClass(category_discoverability::class)]
 #[CoversClass(category_state_updated::class)]
+#[CoversClass(observer::class)]
 final class category_discoverability_test extends \advanced_testcase {
     /**
      * Reset the request caches between tests.
@@ -391,6 +392,102 @@ final class category_discoverability_test extends \advanced_testcase {
         $this->assertFalse($DB->record_exists(category_discoverability::TABLE, ['categoryid' => $doomed->id]));
         $this->assertTrue($DB->record_exists(category_discoverability::TABLE, ['categoryid' => $target->id]));
         $this->assertSame([(int) $target->id], category_discoverability::unlisted_ids());
+    }
+
+    /**
+     * Deleting an unlisted category with its contents moved into a listed one lists them.
+     *
+     * The deleted category's own state does not travel with its contents: they follow the new
+     * parent's path, as after any move by a holder of moodle/category:manage. The row is gone, so
+     * nothing unlisted is left, and an outsider who could not see the course before now can.
+     *
+     * @return void
+     */
+    public function test_contents_moved_out_of_an_unlisted_category_follow_their_new_parent(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $this->setAdminUser();
+
+        $doomed = $generator->create_category();
+        $target = $generator->create_category();
+        $course = $generator->create_course(['category' => $doomed->id]);
+        $outsider = $generator->create_user();
+        category_discoverability::set_state((int) $doomed->id, category_discoverability::STATE_UNLISTED);
+
+        $this->setUser($outsider);
+        access::reset_caches();
+        $record = $DB->get_record('course', ['id' => $course->id], '*', MUST_EXIST);
+        $this->assertSame([], access::filter_courses([$record]), 'Precondition: the unlisted category withholds its course.');
+
+        $this->setAdminUser();
+        \core_course_category::get($doomed->id)->delete_move($target->id, false);
+
+        $this->assertFalse($DB->record_exists(category_discoverability::TABLE, ['categoryid' => $doomed->id]));
+        $this->assertSame([], category_discoverability::unlisted_ids());
+        $this->setUser($outsider);
+        access::reset_caches();
+        $record = $DB->get_record('course', ['id' => $course->id], '*', MUST_EXIST);
+        $this->assertSame((int) $target->id, (int) $record->category, 'Precondition: core moved the course.');
+        $this->assertSame([$record], access::filter_courses([$record]), 'The moved course follows its listed new parent.');
+    }
+
+    /**
+     * A deletion core aborts keeps the states of the categories it leaves alive.
+     *
+     * On Moodle 5.2 delete_course() refuses no deletion a test can arrange (only the site
+     * course), so the abort is the other one core leaves open: a plugin's before_course_deleted
+     * callback that throws. delete_full() meets it on the course of the child, after the
+     * pre_course_category_delete callbacks have run for the parent and for the child. The state
+     * rows must survive that: the categories are still there, and the unlisted ones must stay so.
+     * The control lets the same deletion finish without the throwing callback.
+     *
+     * @return void
+     */
+    public function test_a_deletion_core_aborts_keeps_the_states(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $this->setAdminUser();
+
+        $parent = $generator->create_category();
+        $child = $generator->create_category(['parent' => $parent->id]);
+        $course = $generator->create_course(['category' => $child->id]);
+        $outsider = $generator->create_user();
+        category_discoverability::set_state((int) $parent->id, category_discoverability::STATE_UNLISTED);
+        category_discoverability::set_state((int) $child->id, category_discoverability::STATE_PUBLIC);
+        $this->redirectHook(
+            \core_course\hook\before_course_deleted::class,
+            function (): void {
+                throw new \moodle_exception('generalexceptionmessage', 'error', '', 'A plugin refused the deletion.');
+            }
+        );
+
+        try {
+            \core_course_category::get($parent->id)->delete_full(false);
+            $this->fail('Precondition: the throwing callback must abort the deletion.');
+        } catch (\moodle_exception $e) {
+            $this->assertSame('generalexceptionmessage', $e->errorcode);
+        }
+
+        $this->assertTrue($DB->record_exists('course', ['id' => $course->id]), 'Precondition: the course survived.');
+        $this->assertTrue($DB->record_exists('course_categories', ['id' => $child->id]), 'Precondition: the child survived.');
+        category_discoverability::reset_caches();
+        $this->assertSame(category_discoverability::STATE_UNLISTED, category_discoverability::get_state((int) $parent->id));
+        $this->assertSame(category_discoverability::STATE_PUBLIC, category_discoverability::get_state((int) $child->id));
+        $this->setUser($outsider);
+        access::reset_caches();
+        $this->assertFalse(
+            category_access::is_category_discoverable((int) $parent->id),
+            'The unlisted category core did not delete must stay withheld.'
+        );
+
+        // Control: without the throwing callback the same deletion completes, and both rows go.
+        $this->setAdminUser();
+        $this->stopHookRedirections();
+        \core_course_category::get($parent->id)->delete_full(false);
+        $this->assertFalse($DB->record_exists(category_discoverability::TABLE, ['categoryid' => $parent->id]));
+        $this->assertFalse($DB->record_exists(category_discoverability::TABLE, ['categoryid' => $child->id]));
     }
 
     /**

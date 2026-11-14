@@ -43,14 +43,16 @@ use local_unlistedcourses\category_discoverability;
  *
  * The quantifier is the predicate's. When a category above this one is unlisted
  * too, a user must satisfy that one as well, so the count is the intersection of
- * the eligible sets, not this category's own set. A headline that ignored the
+ * the eligible sets, not this category's own set. Every figure is counted in the
+ * database, so the page issues the same statements for a cohort of ten people and
+ * for one of a hundred thousand, and holds no list of user ids. A headline that ignored the
  * ancestor would report people who cannot see the category, and would miss the
  * "visible to nobody" warning exactly when nobody is the true answer.
  *
  * A public category gets a different panel and no accounting. The cohort and
  * role terms answer "who still sees this while it is unlisted", and a public
  * category is shown to everybody, visitors included, so the counts would answer
- * a question nobody asked, at two statements per unlisted ancestor. What an
+ * a question nobody asked, at two statements of their own. What an
  * administrator needs there instead is what a visitor will be served, and the
  * two arrangements that make the public state inert: an unlisted category above
  * it, or a hidden category anywhere on its path.
@@ -127,17 +129,7 @@ class category_preview implements \renderable, \templatable {
         /* Counted over every cohort at this category, not over the page of them the
            template names: the count answers "is anybody left", which must not change
            with a listing limit or with who is reading it. */
-        $cohortusers = self::cohort_members($this->context->id);
-        $roleusers = self::role_holders($pathids);
-        $eligible = array_unique(array_merge($cohortusers, $roleusers));
-
-        /* AND over the unlisted categories above this one, as category_access::answers()
-           does (see the class docblock). Two more statements per unlisted ancestor, a
-           price only this page pays. */
-        foreach ($unlistedancestors as $ancestorid) {
-            $eligible = array_intersect($eligible, self::eligible_users($ancestorid, $pathids));
-        }
-        $visiblecount = count($eligible);
+        $visiblecount = self::count_eligible($categoryid, $pathids, $unlistedancestors);
 
         return [
             'state' => $state,
@@ -151,7 +143,7 @@ class category_preview implements \renderable, \templatable {
             'hascohorts' => (bool) $cohorts,
             'cohortsmore' => $cohortsmore,
             'cohortsurl' => (new \moodle_url('/cohort/index.php', ['contextid' => $this->context->id]))->out(false),
-            'roleholders' => count($roleusers),
+            'roleholders' => self::count_role_holders($pathids),
             'visiblecount' => $visiblecount,
             'nobodywarning' => $unlisted && $visiblecount === 0,
             'themewarning' => self::theme_warning(),
@@ -233,21 +225,74 @@ class category_preview implements \renderable, \templatable {
     }
 
     /**
-     * The users one effectively-unlisted category on the path leaves it open to.
+     * How many people this category stays visible to besides staff, in one statement.
+     *
+     * The people its own two terms admit, kept only when every unlisted category above it
+     * admits them too: the AND category_access::answers() applies (see the class
+     * docblock). Counted in the database, whatever the size of the cohorts, as a
+     * COUNT(DISTINCT) over the union of the terms - kept with duplicates, so the DISTINCT
+     * is what counts a member of two cohorts, or a member who also holds a role, once -
+     * with one membership test per unlisted ancestor.
+     *
+     * @param int $categoryid This category's id.
+     * @param array $pathids The ids on its path, ancestor first.
+     * @param array $unlistedancestors The unlisted categories above it.
+     * @return int The number of distinct users.
+     */
+    private static function count_eligible(int $categoryid, array $pathids, array $unlistedancestors): int {
+        global $DB;
+
+        [$ownsql, $params] = self::term_sql($categoryid, $pathids, 'own');
+        $conditions = [];
+        foreach (array_values($unlistedancestors) as $index => $ancestorid) {
+            [$termsql, $termparams] = self::term_sql((int) $ancestorid, $pathids, 'anc' . $index);
+            $conditions[] = "e.userid IN ($termsql)";
+            $params += $termparams;
+        }
+        $where = $conditions ? 'WHERE ' . implode(' AND ', $conditions) : '';
+        $sql = "SELECT COUNT(DISTINCT e.userid)
+                  FROM ($ownsql) e
+                $where";
+        return (int) $DB->count_records_sql($sql, $params);
+    }
+
+    /**
+     * The user ids one category on the path admits, as SQL, duplicates kept.
      *
      * Its own two terms, spelled the way category_access spells them: a cohort whose
-     * context is that category's, and a role at it or at a category above it - which is
-     * the prefix of this path, never the whole of it. Staff are outside the count here
-     * for the reason the class docblock gives.
+     * context is that category's, read with no visible filter because an invisible cohort
+     * still grants, and a role at it or at a category above it - the prefix of this path up
+     * to it, never the whole of it, so a role below an unlisted ancestor opens nothing
+     * there. Staff are outside the count for the reason the class docblock gives. Every
+     * placeholder carries the prefix, so several terms can share one statement.
      *
-     * @param int $categoryid An unlisted category on this category's path.
+     * @param int $categoryid A category on this category's path, this one included.
      * @param array $pathids The ids on this category's path, ancestor first.
-     * @return array The user ids, deduplicated.
+     * @param string $prefix A placeholder prefix unique within the statement.
+     * @return array The SQL and its named parameters.
      */
-    private static function eligible_users(int $categoryid, array $pathids): array {
+    private static function term_sql(int $categoryid, array $pathids, string $prefix): array {
+        global $DB;
+
+        $parts = [];
+        $params = [];
         $context = \core\context\coursecat::instance($categoryid, IGNORE_MISSING);
-        $cohortusers = $context ? self::cohort_members($context->id) : [];
-        return array_unique(array_merge($cohortusers, self::role_holders(self::prefix_to($pathids, $categoryid))));
+        if ($context) {
+            $parts[] = "SELECT cm.userid
+                          FROM {cohort_members} cm
+                          JOIN {cohort} c ON c.id = cm.cohortid
+                         WHERE c.contextid = :{$prefix}ctx";
+            $params[$prefix . 'ctx'] = $context->id;
+        }
+        // Never empty: the category is on its own prefix.
+        [$insql, $inparams] = $DB->get_in_or_equal(self::prefix_to($pathids, $categoryid), SQL_PARAMS_NAMED, $prefix . 'cat');
+        $parts[] = "SELECT ra.userid
+                      FROM {role_assignments} ra
+                      JOIN {context} ctx ON ctx.id = ra.contextid
+                     WHERE ctx.contextlevel = :{$prefix}lvl
+                       AND ctx.instanceid $insql";
+        $params[$prefix . 'lvl'] = CONTEXT_COURSECAT;
+        return [implode(' UNION ALL ', $parts), $params + $inparams];
     }
 
     /**
@@ -299,27 +344,7 @@ class category_preview implements \renderable, \templatable {
     }
 
     /**
-     * The users belonging to a cohort whose context is this one.
-     *
-     * Read straight from the tables for the reason category_access gives: an
-     * invisible cohort still grants, so cohort_get_user_cohorts() and anything
-     * else filtering on visible would undercount.
-     *
-     * @param int $contextid The category's own context id.
-     * @return array The user ids, deduplicated.
-     */
-    private static function cohort_members(int $contextid): array {
-        global $DB;
-
-        $sql = "SELECT DISTINCT cm.userid
-                  FROM {cohort_members} cm
-                  JOIN {cohort} c ON c.id = cm.cohortid
-                 WHERE c.contextid = :contextid";
-        return array_map('intval', $DB->get_fieldset_sql($sql, ['contextid' => $contextid]));
-    }
-
-    /**
-     * The users holding any role at one of these categories.
+     * How many people hold any role at one of these categories, each counted once.
      *
      * The whole path, because a role at a listed ancestor opens an unlisted
      * descendant - the rule the predicate applies, reproduced here so the two
@@ -327,21 +352,21 @@ class category_preview implements \renderable, \templatable {
      * a relationship with this category.
      *
      * @param array $categoryids The category ids to read, this one and its ancestors.
-     * @return array The user ids, deduplicated.
+     * @return int The number of distinct users.
      */
-    private static function role_holders(array $categoryids): array {
+    private static function count_role_holders(array $categoryids): int {
         global $DB;
 
         if (!$categoryids) {
-            return [];
+            return 0;
         }
         [$insql, $params] = $DB->get_in_or_equal($categoryids, SQL_PARAMS_NAMED, 'cat');
         $params['contextlevel'] = CONTEXT_COURSECAT;
-        $sql = "SELECT DISTINCT ra.userid
+        $sql = "SELECT COUNT(DISTINCT ra.userid)
                   FROM {role_assignments} ra
                   JOIN {context} ctx ON ctx.id = ra.contextid
                  WHERE ctx.contextlevel = :contextlevel
                    AND ctx.instanceid $insql";
-        return array_map('intval', $DB->get_fieldset_sql($sql, $params));
+        return (int) $DB->count_records_sql($sql, $params);
     }
 }

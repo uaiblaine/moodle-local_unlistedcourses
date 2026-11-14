@@ -80,7 +80,10 @@ namespace local_unlistedcourses;
  * carry, one for the viewer's cohorts and one for the viewer's category roles.
  * When nothing is unlisted it is one, and the same one for a site admin and
  * for a visitor. Context instances are resolved on top of that, from
- * accesslib's own cache.
+ * accesslib's own cache. The budget holds for filter_categories() and
+ * are_categories_discoverable(), and for single calls on categories a filter
+ * has already answered in the request; a cold single call costs one statement
+ * for its path, so a caller walking many categories asks for them in one batch.
  *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine
@@ -170,7 +173,10 @@ class category_access {
      * keep paginating with them. An item that carries its own path costs
      * nothing to resolve, which is why the two shapes core hands around - the
      * category object and the record - are read for it before the fallback
-     * query runs.
+     * query runs. That path is trusted, so it must come from a record read in
+     * the current request: an item kept across a move answers for its old path.
+     * {@see access::filter_courses_public()} reads nothing off the item, the
+     * stricter rule.
      *
      * @param array $categories Category objects, records or ids, any keys.
      * @return array The same array minus the categories this user must not discover.

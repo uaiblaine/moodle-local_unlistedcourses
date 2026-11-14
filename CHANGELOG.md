@@ -4,6 +4,50 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+Version `2026042009`: the fixes of the 2026-11-13 audit. `db/events.php` gains an observer, so the
+version is bumped; no database changes.
+
+### Fixed
+
+- A category's discoverability state is dropped when core fires `course_category_deleted`, after
+  the category is gone, instead of from the `pre_course_category_delete` and
+  `pre_course_category_delete_move` callbacks, which core runs before the deletion can still fail.
+  A deletion core aborted (for instance when another plugin's course-deletion callback threw)
+  left the surviving categories without their state, so an unlisted category listed itself and
+  its courses again.
+- The category discoverability page writes nothing when the submitted state is not one of the
+  choices the form offers now (the category was changed by somebody else since the page was
+  shown), and says so. The missing value was read as listed, so a stale form un-hid a category
+  nobody chose to un-hide.
+- `discoverability::set_state()` and `category_discoverability::set_state()` read, decide and
+  write a real change under a core lock per course or category, so two people saving the same one
+  at once no longer meet a database error on the unique key, and the capability decision is made
+  on the row that is then written. A call that changes nothing takes no lock. A writer still
+  waiting after five seconds is refused with a message (`statebusy`) and writes nothing; a restore
+  that meets it keeps the course's state, logs a warning (`restore_statebusy`) and completes.
+- An `enrol_coursecompleted` instance whose prerequisite is the site home promises the course to
+  nobody: the per-course next action answered "conditional" for every logged-in user, where the
+  batch answered nothing.
+
+### Changed
+
+- The category discoverability page counts who still sees the category in the database: the
+  people holding a role on the path and the people the category stays visible to are each one
+  `COUNT(DISTINCT)` statement, the second one testing each unlisted category above in SQL, where the
+  page loaded every member of every cohort and every role holder into memory and paid two
+  statements more per unlisted ancestor. The figures it shows are unchanged.
+- `tests/marketplace_readiness_test.php` is the fleet template again, which adds the check of the
+  licence block of every shipped Mustache template.
+- The README and the developer guide name core's user profile page and the global search's course
+  area among the surfaces that still name an unlisted course, say that the contents of a category
+  deleted with its contents moved follow their new parent, state that a restorer who may publish
+  keeps a backup's public state (and how a theme can tell a course's managers that it is public),
+  and qualify the category predicate's statement budget for single calls.
+- The README has a Screenshots section, its pictures under `docs/screenshots/` (taken on Moodle
+  5.3; `docs/` is not in the release zip).
+
 ## v5.2-r4 (2026042008) - 2026-11-05
 
 Version `2026042008`: three security fixes from a review, and a way to give the default to the
