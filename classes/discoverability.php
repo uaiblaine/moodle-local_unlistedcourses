@@ -25,6 +25,7 @@
 namespace local_unlistedcourses;
 
 use local_unlistedcourses\event\course_state_updated;
+use local_unlistedcourses\local\id_chunks;
 use local_unlistedcourses\local\state_lock;
 
 /**
@@ -170,7 +171,9 @@ class discoverability {
      * The state of each of these courses, in the order given.
      *
      * One query for every id not already known in this request, which is the
-     * shape {@see access::are_courses_discoverable()} needs for a listing.
+     * shape {@see access::are_courses_discoverable()} needs for a listing, and
+     * one per {@see id_chunks::SIZE} of them beyond that, so no list is too long
+     * for the driver.
      * A course without a row is listed. A row holding a value outside the
      * known states reads as listed too, never as public: the table is the
      * gate for an anonymous page, so an unknown value fails closed.
@@ -190,7 +193,10 @@ class discoverability {
             }
         }
         if ($unknown) {
-            $rows = $DB->get_records_list(self::TABLE, 'courseid', $unknown, '', 'courseid, state');
+            $rows = id_chunks::read(
+                $unknown,
+                fn(array $chunk): array => $DB->get_records_list(self::TABLE, 'courseid', $chunk, '', 'courseid, state')
+            );
             foreach ($unknown as $courseid) {
                 $state = isset($rows[$courseid]) ? (int) $rows[$courseid]->state : self::STATE_DEFAULT;
                 $state = in_array($state, self::states(), true) ? $state : self::STATE_DEFAULT;
@@ -233,13 +239,14 @@ class discoverability {
      * The join and the column a bulk statement uses to read each course's own state beside its row.
      *
      * Use this, not {@see get_states()}, to read the state of a population.
-     * get_states() hands the ids it is asked about to the database as one IN
-     * list, which is the right shape for a page of courses and the wrong one for
-     * a subtree of thousands: get_in_or_equal() emits one placeholder per id and
-     * never chunks, so a caller listing a whole category tree would either hit
-     * the driver's parameter limit or pay a statement per chunk. A LEFT JOIN on
-     * this table carries no parameter at all, so a listing that already runs one
-     * statement over {course} reads the state in that same statement.
+     * get_states() hands the ids it is asked about to the database as an IN
+     * list, one placeholder per id, which is the right shape for a page of
+     * courses and the wrong one for a subtree of thousands: it stays correct past
+     * the driver's parameter limit only by paying a statement per
+     * {@see id_chunks::SIZE} ids, and the caller ships every id to the database.
+     * A LEFT JOIN on this table carries no parameter at all, so a listing that
+     * already runs one statement over {course} reads the state in that same
+     * statement.
      *
      * The caller selects the column under a name of its own and compares it
      * against the STATE_* constants. Two rules travel with it: a course without
@@ -259,7 +266,8 @@ class discoverability {
      */
     public static function state_sql(string $coursealias, string $alias = 'lus'): array {
         foreach ([$coursealias, $alias] as $identifier) {
-            if (!preg_match('/^[a-z][a-z0-9_]{0,29}$/', $identifier)) {
+            // The end anchor is \z, not $: $ also matches before a final newline.
+            if (!preg_match('/^[a-z][a-z0-9_]{0,29}\z/', $identifier)) {
                 throw new \coding_exception('state_sql() aliases must be plain lowercase identifiers.');
             }
         }
@@ -309,13 +317,14 @@ class discoverability {
      * Whether each of these courses may be served to a visitor who is not logged in.
      *
      * The batched form of {@see is_public()}, composing exactly the same answer
-     * and costing four statements whatever the size of the list: the state of
-     * the ids, the courses' own rows, the paths of the distinct categories they
-     * sit in, and the visibility of the distinct categories on those paths. The
-     * memoised unlisted ids are the fifth read, shared with the rest of the
-     * plugin. Every IN list is bounded by what the caller asked for or by the
-     * paths those ids carry, never by a population, so an anonymous listing can
-     * ask about a whole page at once.
+     * and costing four statements for a list of up to {@see id_chunks::SIZE}
+     * ids: the state of the ids, the courses' own rows, the paths of the distinct
+     * categories they sit in, and the visibility of the distinct categories on
+     * those paths. The memoised unlisted ids are the fifth read, shared with the
+     * rest of the plugin. Every IN list is bounded by what the caller asked for
+     * or by the paths those ids carry, so an anonymous listing can ask about a
+     * whole page at once; a longer list pays each of the four once per chunk of
+     * that size rather than failing on the driver's parameter limit.
      *
      * Non-throwing, and false, for a course that is not there: the ids reaching
      * this come from an anonymous surface, so a missing course is an answer,
@@ -353,7 +362,10 @@ class discoverability {
 
             // One statement for the candidates' own rows: their visibility and their category.
             $courses = $candidates
-                ? $DB->get_records_list('course', 'id', $candidates, '', 'id, category, visible')
+                ? id_chunks::read(
+                    $candidates,
+                    fn(array $chunk): array => $DB->get_records_list('course', 'id', $chunk, '', 'id, category, visible')
+                )
                 : [];
             $categories = [];
             foreach ($candidates as $courseid) {
@@ -405,8 +417,12 @@ class discoverability {
             return [];
         }
 
+        $rows = id_chunks::read(
+            $categoryids,
+            fn(array $chunk): array => $DB->get_records_list('course_categories', 'id', $chunk, '', 'id, path')
+        );
         $paths = [];
-        foreach ($DB->get_records_list('course_categories', 'id', $categoryids, '', 'id, path') as $category) {
+        foreach ($rows as $category) {
             $paths[(int) $category->id] = array_values(
                 array_map('intval', array_filter(explode('/', (string) $category->path)))
             );
@@ -432,7 +448,10 @@ class discoverability {
         if (!$ids) {
             return [];
         }
-        return $DB->get_records_list('course_categories', 'id', array_keys($ids), '', 'id, visible');
+        return id_chunks::read(
+            array_keys($ids),
+            fn(array $chunk): array => $DB->get_records_list('course_categories', 'id', $chunk, '', 'id, visible')
+        );
     }
 
     /**
@@ -483,7 +502,7 @@ class discoverability {
      *   the timeout; nothing is written.
      */
     public static function set_state(int $courseid, int $state, ?int $userid = null): void {
-        global $DB, $USER;
+        global $USER;
 
         if (!in_array($state, self::states(), true)) {
             throw new \coding_exception("Unknown discoverability state '{$state}'.");
@@ -514,35 +533,100 @@ class discoverability {
                 require_capability(self::CAPABILITY_PUBLISH, $context, $userid);
             }
 
-            if ($state === self::STATE_DEFAULT) {
-                $DB->delete_records(self::TABLE, ['courseid' => $courseid]);
-            } else if ($row) {
-                $row->state = $state;
-                $row->usermodified = $userid;
-                $row->timemodified = time();
-                $DB->update_record(self::TABLE, $row);
-            } else {
-                $DB->insert_record(self::TABLE, (object) [
-                    'courseid' => $courseid,
-                    'state' => $state,
-                    'usermodified' => $userid,
-                    'timemodified' => time(),
-                ]);
-            }
-
-            // The discoverability answer for this course is a function of the state: forget it.
-            access::reset_caches();
-            self::$states[$courseid] = $state;
-
-            course_state_updated::create([
-                'context' => $context,
-                'objectid' => $courseid,
-                'userid' => $userid,
-                'other' => ['oldstate' => $current, 'newstate' => $state],
-            ])->trigger();
+            self::write($courseid, $state, $current, $row, $userid, $context);
         } finally {
             $lock->release();
         }
+    }
+
+    /**
+     * Take back to listed a public course that a category deletion has just made effective.
+     *
+     * For {@see local\delete_move_guard} alone, which calls it when core deleted a category with
+     * its contents moved and the move, not a decision of somebody holding
+     * local/unlistedcourses:publish, is what lets this course be served anonymously: the course
+     * was public in its own row and inert before the deletion, and is effective after it. No
+     * capability is asked because nothing is published here: the course goes from public to
+     * listed, a restriction, under the deleting user's moodle/category:manage. It cannot be used
+     * for any other transition.
+     *
+     * The row is read again under the course's lock, as {@see set_state()} reads it, and a course
+     * that is no longer public there is left alone. The write is set_state()'s own, so
+     * {@see course_state_updated} fires and every request cache is reset.
+     *
+     * @param int $courseid The course id.
+     * @param int $userid The user who deleted the category, named in the event.
+     * @return void
+     * @throws \local_unlistedcourses\local\state_busy_exception When another writer of this course holds its lock past
+     *   the timeout; nothing is written.
+     */
+    public static function unpublish_after_move(int $courseid, int $userid): void {
+        $context = \core\context\course::instance($courseid, IGNORE_MISSING);
+        if (!$context) {
+            return;
+        }
+
+        $lock = state_lock::course($courseid);
+        try {
+            [$row, $current] = self::read_row($courseid);
+            if ($current !== self::STATE_PUBLIC) {
+                return;
+            }
+            self::write($courseid, self::STATE_DEFAULT, $current, $row, $userid, $context);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /**
+     * Write a decided change of state, reset the caches and fire the event.
+     *
+     * The caller holds the course's lock and has decided the change on the row it read under it.
+     *
+     * @param int $courseid The course id.
+     * @param int $state The new state.
+     * @param int $current The state the row held, read under the lock.
+     * @param \stdClass|false $row The row read under the lock, false when there was none.
+     * @param int $userid The user performing the change.
+     * @param \core\context\course $context The course context.
+     * @return void
+     */
+    private static function write(
+        int $courseid,
+        int $state,
+        int $current,
+        \stdClass|false $row,
+        int $userid,
+        \core\context\course $context
+    ): void {
+        global $DB;
+
+        if ($state === self::STATE_DEFAULT) {
+            $DB->delete_records(self::TABLE, ['courseid' => $courseid]);
+        } else if ($row) {
+            $row->state = $state;
+            $row->usermodified = $userid;
+            $row->timemodified = time();
+            $DB->update_record(self::TABLE, $row);
+        } else {
+            $DB->insert_record(self::TABLE, (object) [
+                'courseid' => $courseid,
+                'state' => $state,
+                'usermodified' => $userid,
+                'timemodified' => time(),
+            ]);
+        }
+
+        // The discoverability answer for this course is a function of the state: forget it.
+        access::reset_caches();
+        self::$states[$courseid] = $state;
+
+        course_state_updated::create([
+            'context' => $context,
+            'objectid' => $courseid,
+            'userid' => $userid,
+            'other' => ['oldstate' => $current, 'newstate' => $state],
+        ])->trigger();
     }
 
     /**

@@ -269,7 +269,7 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
 - **`enrol_apply` is absent from a fresh test site's `enrol_plugins_enabled`** —
   `add_apply_enrol()` in `access_test` enables it first.
 - **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds a hundred and
-  fifty-six guards, and each must redden a test. The apply, autoenrol and coursecompleted gates need a
+  seventy-two guards, and each must redden a test. The apply, autoenrol and coursecompleted gates need a
   stack that mounts those plugins: m502 and m502b mount all three. `mdl ci`, and so
   `mdl mutate --fast`, installs none of them, skips their tests and reads those gates as held
   by nothing. Adding a
@@ -356,7 +356,10 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   `delete_full()` can still throw or `delete_move()` return false, and an aborted deletion would
   leave live categories without their state. `category_discoverability_test` aborts one with a
   redirected `before_course_deleted` hook that throws: 5.2's `delete_course()` has no
-  pending-backup refusal (5.3's has, and its test uses that).
+  pending-backup refusal (5.3's has, and its test uses that). The one pre-delete callback in `lib.php`
+  (`pre_course_category_delete_move`) only reads: it records the public rows a move would make
+  effective, and the observer takes those back to listed once the deletion is certain
+  (`local\delete_move_guard`). A deletion with a move publishes nothing.
 - **Core's Behat cohort generator places a cohort in a category context** through
   `contextlevel | reference` columns (`behat_core_generator::preprocess_cohort()`); the
   plugin's own context file, `tests/behat/behat_local_unlistedcourses.php`, provides only the
