@@ -138,6 +138,13 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
 - **A call that changes nothing needs no capability.** That is what lets the course form
   re-submit "public" from a frozen control when an editor who may not publish saves an
   unrelated change. Remove the short circuit and that save throws.
+- **A real change is read again, decided and written under a core lock** (`local\state_lock`,
+  one resource per course or category), so the capability decision is made on the row that is
+  then written and two first writers never break the unique key. The short circuit above runs
+  twice: once lock-free, so a save that changes nothing takes no lock, and once under the lock;
+  the `noop_transition` gates disable both copies. `state_lock_test` plays the other writer
+  through a fixture lock factory (`$CFG->lock_factory`): the database factories grant a second
+  instance in the same process the lock the first one holds.
 - **The frozen control must persist.** `$mform->freeze()` on its own exports the element's
   DEFAULT, not its value (`formslib.php:2410`). Both forms set that default to the current
   state, so a plain freeze would resubmit the same state, but the persistent freeze makes the
@@ -261,7 +268,7 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
 - **`enrol_apply` is absent from a fresh test site's `enrol_plugins_enabled`** —
   `add_apply_enrol()` in `access_test` enables it first.
 - **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds a hundred and
-  forty-three guards, and each must redden a test. The apply, autoenrol and coursecompleted gates need a
+  fifty-seven guards, and each must redden a test. The apply, autoenrol and coursecompleted gates need a
   stack that mounts those plugins: m503 and m503b mount autoenrol and coursecompleted, and no
   5.3 stack mounts enrol_apply, whose supported range ends at 5.2. `mdl ci`, and so
   `mdl mutate --fast`, installs none of them, skips their tests and reads those gates as held
@@ -344,8 +351,11 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   gate. The block carries the unlisted branch; `category_preview_test` renders the public
   one and asserts the fragment parses, which is what stands in for the lint there.
 - **There is no backup or restore of a category's state.** Moodle has no category backup a
-  plugin could attach to; the row follows the category through core's
-  `pre_course_category_delete` and `pre_course_category_delete_move` callbacks in `lib.php`.
+  plugin could attach to. The row goes when core fires `course_category_deleted` (an internal
+  observer, like `course_deleted`), never from the pre-delete callbacks: core runs those before
+  `delete_full()` can still throw or `delete_move()` return false, and an aborted deletion would
+  leave live categories without their state. `category_discoverability_test` aborts one on a
+  course with a backup pending.
 - **Core's Behat cohort generator places a cohort in a category context** through
   `contextlevel | reference` columns (`behat_core_generator::preprocess_cohort()`); the
   plugin's own context file, `tests/behat/behat_local_unlistedcourses.php`, provides only the

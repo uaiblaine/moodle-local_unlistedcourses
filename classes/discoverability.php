@@ -25,6 +25,7 @@
 namespace local_unlistedcourses;
 
 use local_unlistedcourses\event\course_state_updated;
+use local_unlistedcourses\local\state_lock;
 
 /**
  * The discoverability state of a course: who may learn that it exists.
@@ -465,8 +466,10 @@ class discoverability {
      *
      * The one place the publish capability is checked - see the class
      * docblock for why it is here and not in the form. A call that does not
-     * change the state returns without checking anything. Every change fires
-     * {@see course_state_updated}.
+     * change the state returns without checking anything, and without a lock.
+     * A change is read again, decided and written under the course's lock
+     * ({@see local\state_lock}), so two writers of one course never decide on
+     * the same stale row. Every change fires {@see course_state_updated}.
      *
      * @param int $courseid The course id. Not the site course.
      * @param int $state One of the state constants.
@@ -476,6 +479,8 @@ class discoverability {
      * @throws \coding_exception On an unknown state or the site course.
      * @throws \required_capability_exception When the change enters or leaves the public state and the user may not
      *   publish courses here.
+     * @throws \local_unlistedcourses\local\state_busy_exception When another writer of this course holds its lock past
+     *   the timeout; nothing is written.
      */
     public static function set_state(int $courseid, int $state, ?int $userid = null): void {
         global $DB, $USER;
@@ -489,44 +494,70 @@ class discoverability {
         $context = \core\context\course::instance($courseid);
         $userid = $userid ?? (int) $USER->id;
 
-        $row = $DB->get_record(self::TABLE, ['courseid' => $courseid]);
-        $current = $row ? (int) $row->state : self::STATE_DEFAULT;
-        $current = in_array($current, self::states(), true) ? $current : self::STATE_DEFAULT;
+        // Lock-free first: most calls change nothing (every course form save re-submits the state).
+        [, $current] = self::read_row($courseid);
         if ($current === $state) {
             self::$states[$courseid] = $state;
             return;
         }
 
-        if ($current === self::STATE_PUBLIC || $state === self::STATE_PUBLIC) {
-            require_capability(self::CAPABILITY_PUBLISH, $context, $userid);
+        $lock = state_lock::course($courseid);
+        try {
+            // Read again under the lock: the capability decision and the write are about this row.
+            [$row, $current] = self::read_row($courseid);
+            if ($current === $state) {
+                self::$states[$courseid] = $state;
+                return;
+            }
+
+            if ($current === self::STATE_PUBLIC || $state === self::STATE_PUBLIC) {
+                require_capability(self::CAPABILITY_PUBLISH, $context, $userid);
+            }
+
+            if ($state === self::STATE_DEFAULT) {
+                $DB->delete_records(self::TABLE, ['courseid' => $courseid]);
+            } else if ($row) {
+                $row->state = $state;
+                $row->usermodified = $userid;
+                $row->timemodified = time();
+                $DB->update_record(self::TABLE, $row);
+            } else {
+                $DB->insert_record(self::TABLE, (object) [
+                    'courseid' => $courseid,
+                    'state' => $state,
+                    'usermodified' => $userid,
+                    'timemodified' => time(),
+                ]);
+            }
+
+            // The discoverability answer for this course is a function of the state: forget it.
+            access::reset_caches();
+            self::$states[$courseid] = $state;
+
+            course_state_updated::create([
+                'context' => $context,
+                'objectid' => $courseid,
+                'userid' => $userid,
+                'other' => ['oldstate' => $current, 'newstate' => $state],
+            ])->trigger();
+        } finally {
+            $lock->release();
         }
+    }
 
-        if ($state === self::STATE_DEFAULT) {
-            $DB->delete_records(self::TABLE, ['courseid' => $courseid]);
-        } else if ($row) {
-            $row->state = $state;
-            $row->usermodified = $userid;
-            $row->timemodified = time();
-            $DB->update_record(self::TABLE, $row);
-        } else {
-            $DB->insert_record(self::TABLE, (object) [
-                'courseid' => $courseid,
-                'state' => $state,
-                'usermodified' => $userid,
-                'timemodified' => time(),
-            ]);
-        }
+    /**
+     * The stored row of a course and the state it holds, an unknown value read as listed.
+     *
+     * @param int $courseid The course id.
+     * @return array The row or false, then the state constant.
+     */
+    private static function read_row(int $courseid): array {
+        global $DB;
 
-        // The discoverability answer for this course is a function of the state: forget it.
-        access::reset_caches();
-        self::$states[$courseid] = $state;
-
-        course_state_updated::create([
-            'context' => $context,
-            'objectid' => $courseid,
-            'userid' => $userid,
-            'other' => ['oldstate' => $current, 'newstate' => $state],
-        ])->trigger();
+        $row = $DB->get_record(self::TABLE, ['courseid' => $courseid]);
+        $current = $row ? (int) $row->state : self::STATE_DEFAULT;
+        $current = in_array($current, self::states(), true) ? $current : self::STATE_DEFAULT;
+        return [$row, $current];
     }
 
     /**

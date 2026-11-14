@@ -68,7 +68,15 @@ $form = new categorystate($PAGE->url, [
 if ($form->is_cancelled()) {
     redirect(new moodle_url('/course/index.php', ['categoryid' => $id]));
 } else if ($data = $form->get_data()) {
-    category_discoverability::set_state($id, (int) $data->state);
+    if (!categorystate::save($id, $data)) {
+        // Back to the form, which is re-read against the state saved since it was shown.
+        redirect(
+            $PAGE->url,
+            get_string('categorystate_stale', 'local_unlistedcourses'),
+            null,
+            \core\output\notification::NOTIFY_ERROR
+        );
+    }
     /* Back to this page rather than to the category, so the preview is re-read against
        the state just saved. A save that changes nothing still confirms, although
        set_state() short-circuits it. */
