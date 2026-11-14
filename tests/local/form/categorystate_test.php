@@ -101,6 +101,26 @@ final class categorystate_test extends \advanced_testcase {
     }
 
     /**
+     * Submit the form for a category, as the current user, and hand back what get_data() returns.
+     *
+     * The form is built after the submission, as on the page: its options come from the state
+     * stored at that moment, which is what decides whether the posted value survives.
+     *
+     * @param \core_course_category $category The category.
+     * @param array $post The posted values besides the category id.
+     * @return \stdClass|null The validated data, null when the form refused the submission.
+     */
+    private function submit(\core_course_category $category, array $post): ?\stdClass {
+        categorystate::mock_submit(['id' => (int) $category->id] + $post);
+        $form = new categorystate(null, [
+            'id' => (int) $category->id,
+            'category' => $category,
+            'context' => \core\context\coursecat::instance($category->id),
+        ]);
+        return $form->get_data();
+    }
+
+    /**
      * A user who may change the state but may not publish the category.
      *
      * @param \core_course_category $category The category.
@@ -227,6 +247,84 @@ final class categorystate_test extends \advanced_testcase {
             'selected',
             $this->option_tag($select, category_discoverability::STATE_DEFAULT)
         );
+    }
+
+    /**
+     * A stale public value from a frozen control saves nothing, where the cast read it as listed.
+     *
+     * The editor opened the form on a public category, a publisher unlisted it since, and the
+     * frozen control still posts public, which the rebuilt select no longer offers. Core drops
+     * the value; the save must then write nothing rather than read the absence as listed.
+     *
+     * @return void
+     */
+    public function test_a_submission_whose_state_the_form_dropped_saves_nothing(): void {
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $statemanager = $this->create_statemanager($category);
+        $this->setAdminUser();
+        category_discoverability::set_state((int) $category->id, category_discoverability::STATE_UNLISTED);
+
+        $this->setUser($statemanager);
+        $data = $this->submit($category, ['state' => category_discoverability::STATE_PUBLIC]);
+        $this->assertNotNull($data, 'Precondition: the form accepts the submission.');
+        $this->assertFalse(isset($data->state), 'Precondition: the select dropped a value it no longer offers.');
+
+        $sink = $this->redirectEvents();
+        $this->assertFalse(categorystate::save((int) $category->id, $data));
+        $this->assertSame(category_discoverability::STATE_UNLISTED, category_discoverability::get_state((int) $category->id));
+        $this->assertCount(0, $sink->get_events(), 'A refused save fires nothing.');
+
+        // Control: the same user, the same category, a value the form offers - it is written.
+        $data = $this->submit($category, ['state' => category_discoverability::STATE_DEFAULT]);
+        $this->assertTrue(categorystate::save((int) $category->id, $data));
+        category_discoverability::reset_caches();
+        $this->assertSame(category_discoverability::STATE_DEFAULT, category_discoverability::get_state((int) $category->id));
+        $this->assertCount(1, $sink->get_events());
+        $sink->close();
+    }
+
+    /**
+     * A publisher's public value survives the rebuilt select and is written.
+     *
+     * The other direction of the refusal above: the guard reads an absent state, not a public one.
+     *
+     * @return void
+     */
+    public function test_a_publishers_public_submission_is_saved(): void {
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $this->setAdminUser();
+        category_discoverability::set_state((int) $category->id, category_discoverability::STATE_UNLISTED);
+
+        $data = $this->submit($category, ['state' => category_discoverability::STATE_PUBLIC]);
+        $this->assertTrue(categorystate::save((int) $category->id, $data));
+        category_discoverability::reset_caches();
+        $this->assertSame(category_discoverability::STATE_PUBLIC, category_discoverability::get_state((int) $category->id));
+    }
+
+    /**
+     * The page writes through the form's save, and answers a refused save with an error before the success notice.
+     *
+     * A page cannot be required under PHPUnit, so this reads its source, as category_access_test does.
+     *
+     * @return void
+     */
+    public function test_the_page_refuses_a_save_the_form_refuses(): void {
+        global $CFG;
+
+        $source = file_get_contents($CFG->dirroot . '/local/unlistedcourses/category.php');
+        $save = strpos($source, 'if (!categorystate::save($id, $data)) {');
+        $stale = strpos($source, "get_string('categorystate_stale', 'local_unlistedcourses')");
+        $saved = strpos($source, "get_string('categorystate_saved', 'local_unlistedcourses')");
+
+        $this->assertNotFalse($saved, 'Control: the page confirms a save.');
+        $this->assertNotFalse($save, 'The page must write through categorystate::save() and read its answer.');
+        $this->assertNotFalse($stale, 'The page must tell the editor that nothing was saved.');
+        $this->assertLessThan($stale, $save);
+        $this->assertLessThan($saved, $stale);
+        // The page's comments name set_state(); a call passes it the category id.
+        $this->assertSame(0, substr_count($source, 'category_discoverability::set_state($'), 'The page writes around the form.');
     }
 
     /**

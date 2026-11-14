@@ -85,7 +85,28 @@ final class marketplace_readiness_test extends \basic_testcase {
     }
 
     /**
-     * Every shipped file under the given directories with one of the extensions.
+     * The paths thirdpartylibs.xml declares, relative to the root.
+     *
+     * Declared third-party code ships as its authors wrote it, without this plugin's boilerplate,
+     * which the directory's guidelines accept.
+     *
+     * @return array List of paths, files or directories, without a trailing slash.
+     */
+    private function thirdparty_locations(): array {
+        $file = $this->root() . '/thirdpartylibs.xml';
+        if (!is_readable($file)) {
+            return [];
+        }
+        $locations = [];
+        foreach (simplexml_load_file($file)->library as $library) {
+            $locations[] = trim((string) $library->location, '/');
+        }
+        return $locations;
+    }
+
+    /**
+     * Every shipped file under the given directories with one of the extensions, declared third-party
+     * code excluded.
      *
      * @param array $dirs Directories relative to the root ('' is the root itself).
      * @param array $extensions File extensions without the dot.
@@ -106,6 +127,11 @@ final class marketplace_readiness_test extends \basic_testcase {
                 }
                 if (str_starts_with($path, '.') || str_starts_with($path, 'node_modules/')) {
                     continue;
+                }
+                foreach ($this->thirdparty_locations() as $location) {
+                    if ($path === $location || str_starts_with($path, $location . '/')) {
+                        continue 2;
+                    }
                 }
                 $found[] = $path;
             }
@@ -336,6 +362,10 @@ final class marketplace_readiness_test extends \basic_testcase {
      * Every shipped source file carries the GPL boilerplate and a copyright
      * line (Boilerplate, Copyrights).
      *
+     * A Mustache template carries the whole block core's templates open with and no copyright line,
+     * as core's do: a directory reviewer found templates whose comment held only the block's first
+     * line, or no block at all.
+     *
      * @return void
      */
     public function test_source_files_carry_the_boilerplate(): void {
@@ -349,6 +379,22 @@ final class marketplace_readiness_test extends \basic_testcase {
             $this->assertStringContainsString('GNU General Public License', $source, "$path lacks the boilerplate.");
             if (!str_starts_with($path, 'lang/')) {
                 $this->assertStringContainsString('@copyright', $source, "$path lacks @copyright.");
+            }
+        }
+
+        // Whitespace is collapsed first, so a block wrapped or indented differently still matches; the
+        // URLs are left out because core's own templates spell them with http and with https.
+        $block = [
+            'This file is part of Moodle',
+            'Moodle is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License',
+            'either version 3 of the License, or (at your option) any later version.',
+            'WITHOUT ANY WARRANTY',
+            'along with Moodle. If not, see',
+        ];
+        foreach ($this->shipped_files(['templates'], ['mustache']) as $path) {
+            $source = preg_replace('/\s+/', ' ', file_get_contents($this->root() . '/' . $path));
+            foreach ($block as $line) {
+                $this->assertStringContainsString($line, $source, "$path lacks the boilerplate: '$line'.");
             }
         }
     }

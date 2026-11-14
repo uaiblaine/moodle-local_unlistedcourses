@@ -26,8 +26,8 @@ use PHPUnit\Framework\Attributes\CoversClass;
  * somebody who may make it, and every "still in state X" assertion follows a
  * refused attempt to leave it - so a gate that stopped gating would be seen.
  * The deletion tests go through core's own delete_full() and delete_move(),
- * so what they prove is the wiring of the lib.php callbacks, not the cleanup
- * method on its own.
+ * so what they prove is the wiring of the course_category_deleted observer,
+ * not the cleanup method on its own.
  *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine
@@ -35,6 +35,7 @@ use PHPUnit\Framework\Attributes\CoversClass;
  */
 #[CoversClass(category_discoverability::class)]
 #[CoversClass(category_state_updated::class)]
+#[CoversClass(observer::class)]
 final class category_discoverability_test extends \advanced_testcase {
     /**
      * Reset the request caches between tests.
@@ -391,6 +392,112 @@ final class category_discoverability_test extends \advanced_testcase {
         $this->assertFalse($DB->record_exists(category_discoverability::TABLE, ['categoryid' => $doomed->id]));
         $this->assertTrue($DB->record_exists(category_discoverability::TABLE, ['categoryid' => $target->id]));
         $this->assertSame([(int) $target->id], category_discoverability::unlisted_ids());
+    }
+
+    /**
+     * Deleting an unlisted category with its contents moved into a listed one lists them.
+     *
+     * The deleted category's own state does not travel with its contents: they follow the new
+     * parent's path, as after any move by a holder of moodle/category:manage. The row is gone, so
+     * nothing unlisted is left, and an outsider who could not see the course before now can.
+     *
+     * @return void
+     */
+    public function test_contents_moved_out_of_an_unlisted_category_follow_their_new_parent(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $this->setAdminUser();
+
+        $doomed = $generator->create_category();
+        $target = $generator->create_category();
+        $course = $generator->create_course(['category' => $doomed->id]);
+        $outsider = $generator->create_user();
+        category_discoverability::set_state((int) $doomed->id, category_discoverability::STATE_UNLISTED);
+
+        $this->setUser($outsider);
+        access::reset_caches();
+        $record = $DB->get_record('course', ['id' => $course->id], '*', MUST_EXIST);
+        $this->assertSame([], access::filter_courses([$record]), 'Precondition: the unlisted category withholds its course.');
+
+        $this->setAdminUser();
+        \core_course_category::get($doomed->id)->delete_move($target->id, false);
+
+        $this->assertFalse($DB->record_exists(category_discoverability::TABLE, ['categoryid' => $doomed->id]));
+        $this->assertSame([], category_discoverability::unlisted_ids());
+        $this->setUser($outsider);
+        access::reset_caches();
+        $record = $DB->get_record('course', ['id' => $course->id], '*', MUST_EXIST);
+        $this->assertSame((int) $target->id, (int) $record->category, 'Precondition: core moved the course.');
+        $this->assertSame([$record], access::filter_courses([$record]), 'The moved course follows its listed new parent.');
+    }
+
+    /**
+     * A deletion core aborts keeps the states of the categories it leaves alive.
+     *
+     * A course with a backup pending is one delete_course() refuses, and delete_full() throws
+     * when it meets it, after it has started on the category and on its parent. The state rows
+     * must survive that: the categories are still there, and the unlisted ones must stay so.
+     * The control removes the pending backup and lets the same deletion finish.
+     *
+     * @return void
+     */
+    public function test_a_deletion_core_aborts_keeps_the_states(): void {
+        global $CFG, $DB;
+        require_once($CFG->dirroot . '/backup/backup.class.php');
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $this->setAdminUser();
+
+        $parent = $generator->create_category();
+        $child = $generator->create_category(['parent' => $parent->id]);
+        $course = $generator->create_course(['category' => $child->id]);
+        $outsider = $generator->create_user();
+        category_discoverability::set_state((int) $parent->id, category_discoverability::STATE_UNLISTED);
+        category_discoverability::set_state((int) $child->id, category_discoverability::STATE_PUBLIC);
+        $pending = $DB->insert_record('backup_controllers', (object) [
+            'backupid' => md5('local_unlistedcourses' . $course->id),
+            'operation' => 'backup',
+            'type' => \backup::TYPE_1COURSE,
+            'itemid' => $course->id,
+            'format' => 'moodle2',
+            'interactive' => 0,
+            'purpose' => \backup::MODE_ASYNC,
+            'userid' => get_admin()->id,
+            'status' => \backup::STATUS_AWAITING,
+            'execution' => \backup::EXECUTION_DELAYED,
+            'executiontime' => 0,
+            'checksum' => md5('local_unlistedcourses'),
+            'timecreated' => time(),
+            'timemodified' => time(),
+            'progress' => 0,
+            'controller' => '',
+        ]);
+
+        try {
+            \core_course_category::get($parent->id)->delete_full(false);
+            $this->fail('Precondition: core must refuse to delete a course with a backup pending.');
+        } catch (\moodle_exception $e) {
+            $this->assertSame('cannotdeletecategorycourse', $e->errorcode);
+        }
+
+        $this->assertTrue($DB->record_exists('course_categories', ['id' => $child->id]), 'Precondition: the child survived.');
+        category_discoverability::reset_caches();
+        $this->assertSame(category_discoverability::STATE_UNLISTED, category_discoverability::get_state((int) $parent->id));
+        $this->assertSame(category_discoverability::STATE_PUBLIC, category_discoverability::get_state((int) $child->id));
+        $this->setUser($outsider);
+        access::reset_caches();
+        $this->assertFalse(
+            category_access::is_category_discoverable((int) $parent->id),
+            'The unlisted category core did not delete must stay withheld.'
+        );
+
+        // Control: without the pending backup the same deletion completes, and both rows go.
+        $this->setAdminUser();
+        $DB->delete_records('backup_controllers', ['id' => $pending]);
+        \core_course_category::get($parent->id)->delete_full(false);
+        $this->assertFalse($DB->record_exists(category_discoverability::TABLE, ['categoryid' => $parent->id]));
+        $this->assertFalse($DB->record_exists(category_discoverability::TABLE, ['categoryid' => $child->id]));
     }
 
     /**
