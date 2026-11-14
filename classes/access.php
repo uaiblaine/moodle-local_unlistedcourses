@@ -24,6 +24,8 @@
 
 namespace local_unlistedcourses;
 
+use local_unlistedcourses\local\id_chunks;
+
 /**
  * Decides whether the current user may discover a course, and what they may do to join it.
  *
@@ -483,8 +485,9 @@ class access {
      * that is not primed is computed as before, so priming is an optimisation, never a term.
      *
      * Keyed by the viewer, like every memo here, and dropped by {@see reset_caches()}. The
-     * course ids go into one IN list: pass the probed courses of a listing (unlisted or in a
-     * withheld category), not a whole population.
+     * course ids go into one IN list up to {@see id_chunks::SIZE} of them, and statements 1 and
+     * 4 run once per chunk of that size beyond it; the probe itself still costs per course, so
+     * the probed courses of a listing (unlisted or in a withheld category) are what belongs here.
      *
      * @param array $courseids Course ids the probe is about to ask about.
      * @return void
@@ -510,17 +513,20 @@ class access {
             return;
         }
 
-        // 1. The contexts and the enabled instances, one row per instance or per course without one.
-        [$insql, $params] = $DB->get_in_or_equal($asked, SQL_PARAMS_NAMED, 'crs');
+        /* 1. The contexts and the enabled instances, one row per instance or per course without one.
+           Keyed by an instance or a context, each of one course, so chunks merge into the same rows. */
         $ctxfields = \core\context_helper::get_preload_record_columns_sql('ctx');
-        $records = $DB->get_records_sql(
-            "SELECT COALESCE(e.id, -ctx.id) AS probekey, e.*, {$ctxfields}
-               FROM {context} ctx
-          LEFT JOIN {enrol} e ON e.courseid = ctx.instanceid AND e.status = :enabled
-              WHERE ctx.contextlevel = :courselevel AND ctx.instanceid {$insql}
-           ORDER BY ctx.instanceid, e.sortorder, e.id",
-            $params + ['enabled' => ENROL_INSTANCE_ENABLED, 'courselevel' => CONTEXT_COURSE]
-        );
+        $records = id_chunks::read($asked, function (array $chunk) use ($DB, $ctxfields): array {
+            [$insql, $params] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED, 'crs');
+            return $DB->get_records_sql(
+                "SELECT COALESCE(e.id, -ctx.id) AS probekey, e.*, {$ctxfields}
+                   FROM {context} ctx
+              LEFT JOIN {enrol} e ON e.courseid = ctx.instanceid AND e.status = :enabled
+                  WHERE ctx.contextlevel = :courselevel AND ctx.instanceid {$insql}
+               ORDER BY ctx.instanceid, e.sortorder, e.id",
+                $params + ['enabled' => ENROL_INSTANCE_ENABLED, 'courselevel' => CONTEXT_COURSE]
+            );
+        });
         /* The filter of enrol_get_instances($courseid, true): an enabled plugin whose code is present.
            A course without instances comes back as one row of nulls, which it drops too: no plugin
            name equals a null enrol, and enrol//lib.php does not exist, so the course keeps []. */
@@ -608,14 +614,17 @@ class access {
         // 4. The rows on every capped instance: the count can_self_enrol() tests its limit against.
         $taken = [];
         if ($capped) {
-            [$capsql, $capparams] = $DB->get_in_or_equal($capped, SQL_PARAMS_NAMED, 'cap');
-            $taken = $DB->get_records_sql_menu(
-                "SELECT ue.enrolid, COUNT(ue.id)
-                   FROM {user_enrolments} ue
-                  WHERE ue.enrolid {$capsql}
-               GROUP BY ue.enrolid",
-                $capparams
-            );
+            // Grouped by instance, so each count comes from the one chunk its instance is in.
+            $taken = id_chunks::read($capped, function (array $chunk) use ($DB): array {
+                [$capsql, $capparams] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED, 'cap');
+                return $DB->get_records_sql_menu(
+                    "SELECT ue.enrolid, COUNT(ue.id)
+                       FROM {user_enrolments} ue
+                      WHERE ue.enrolid {$capsql}
+                   GROUP BY ue.enrolid",
+                    $capparams
+                );
+            });
         }
 
         foreach ($selfinstances as $instance) {
@@ -655,7 +664,10 @@ class access {
             }
         }
         if ($missing) {
-            $rows = $DB->get_records_list('course', 'id', $missing, '', 'id, category');
+            $rows = id_chunks::read(
+                $missing,
+                fn(array $chunk): array => $DB->get_records_list('course', 'id', $chunk, '', 'id, category')
+            );
             foreach ($missing as $courseid) {
                 $categories[$courseid] = isset($rows[$courseid]) ? (int) $rows[$courseid]->category : 0;
             }
@@ -1204,9 +1216,11 @@ class access {
      * statement and checked against the viewer's access data, loaded once per request; and the
      * autoenrol rule, which it cannot judge, so an instance with one is never dated here.
      *
-     * The course ids go into one IN list, and get_in_or_equal() does not chunk: pass a page of
-     * courses, never a whole population. A visitor, the guest account, the site course and an id
-     * with no instance answer none; a visitor and the guest account cost no statement.
+     * The four statements hold for up to {@see id_chunks::SIZE} course ids, which go into one IN
+     * list; past that, statements 1 and 4 run once per chunk of that size, so a longer list stays
+     * correct and costs more. It is meant for a page of courses. A visitor, the guest account,
+     * the site course and an id with no instance answer none; a visitor and the guest account cost
+     * no statement.
      *
      * @param array $courseids Course ids.
      * @return array Map of courseid => the answer of {@see get_next_action()}, in the order given.
@@ -1239,19 +1253,25 @@ class access {
             return $answers;
         }
 
-        // 1. The enabled instances, in each course's own order of methods.
-        [$coursesql, $courseparams] = $DB->get_in_or_equal($asked, SQL_PARAMS_NAMED, 'crs');
+        /* 1. The enabled instances, in each course's own order of methods. A course's instances
+           all come from the chunk it is in, so each course keeps that order whatever the chunks. */
         [$pluginsql, $pluginparams] = $DB->get_in_or_equal(array_keys($plugins), SQL_PARAMS_NAMED, 'plg');
         $ctxfields = \core\context_helper::get_preload_record_columns_sql('ctx');
-        $instances = $DB->get_records_sql(
-            "SELECT e.id, e.courseid, e.enrol, e.enrolstartdate, e.enrolenddate, e.password, e.cost,
-                    e.customint1, e.customint3, e.customint4, e.customint5, e.customint6, e.customint8,
-                    e.customtext2, {$ctxfields}
-               FROM {enrol} e
-          LEFT JOIN {context} ctx ON ctx.instanceid = e.courseid AND ctx.contextlevel = :courselevel
-              WHERE e.courseid {$coursesql} AND e.status = :enabled AND e.enrol {$pluginsql}
-           ORDER BY e.sortorder, e.id",
-            $courseparams + $pluginparams + ['enabled' => ENROL_INSTANCE_ENABLED, 'courselevel' => CONTEXT_COURSE]
+        $instances = id_chunks::read(
+            $asked,
+            function (array $chunk) use ($DB, $pluginsql, $pluginparams, $ctxfields): array {
+                [$coursesql, $courseparams] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED, 'crs');
+                return $DB->get_records_sql(
+                    "SELECT e.id, e.courseid, e.enrol, e.enrolstartdate, e.enrolenddate, e.password, e.cost,
+                            e.customint1, e.customint3, e.customint4, e.customint5, e.customint6, e.customint8,
+                            e.customtext2, {$ctxfields}
+                       FROM {enrol} e
+                  LEFT JOIN {context} ctx ON ctx.instanceid = e.courseid AND ctx.contextlevel = :courselevel
+                      WHERE e.courseid {$coursesql} AND e.status = :enabled AND e.enrol {$pluginsql}
+                   ORDER BY e.sortorder, e.id",
+                    $courseparams + $pluginparams + ['enabled' => ENROL_INSTANCE_ENABLED, 'courselevel' => CONTEXT_COURSE]
+                );
+            }
         );
         if (!$instances) {
             return $answers;
@@ -1315,15 +1335,18 @@ class access {
         // 4. The rows on every capped instance, all of them and the ones that have not ended (enrol_apply's count).
         $taken = [];
         if ($capped) {
-            [$capsql, $capparams] = $DB->get_in_or_equal($capped, SQL_PARAMS_NAMED, 'cap');
-            $taken = $DB->get_records_sql(
-                "SELECT ue.enrolid, COUNT(ue.id) AS total,
-                        SUM(CASE WHEN ue.timeend = 0 OR ue.timeend > :now THEN 1 ELSE 0 END) AS live
-                   FROM {user_enrolments} ue
-                  WHERE ue.enrolid {$capsql}
-               GROUP BY ue.enrolid",
-                $capparams + ['now' => $now]
-            );
+            // Grouped by instance, so each count comes from the one chunk its instance is in.
+            $taken = id_chunks::read($capped, function (array $chunk) use ($DB, $now): array {
+                [$capsql, $capparams] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED, 'cap');
+                return $DB->get_records_sql(
+                    "SELECT ue.enrolid, COUNT(ue.id) AS total,
+                            SUM(CASE WHEN ue.timeend = 0 OR ue.timeend > :now THEN 1 ELSE 0 END) AS live
+                       FROM {user_enrolments} ue
+                      WHERE ue.enrolid {$capsql}
+                   GROUP BY ue.enrolid",
+                    $capparams + ['now' => $now]
+                );
+            });
         }
 
         $outcomes = [];

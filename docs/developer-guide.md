@@ -214,6 +214,11 @@ control is a page of this plugin's own. `local_unlistedcourses_extend_settings_n
 `lib.php` hangs it on core's `categorysettings` container, node key `unlistedcoursescatstate`, for a
 viewer holding `managecategorystate` in that category. The page:
 
+- refuses an id that names no category (0 or below) through
+  `category_access::require_category_id()` with core's `unknowncategory`, before anything is read:
+  `core_course_category::get(0)` hands the top level over to anybody who may browse the course
+  list, and the category context of id 0 has no row, so the page would otherwise end on a database
+  error (`require_discoverable()` asks the same first);
 - calls `core_course_category::get($id, MUST_EXIST)` **before** `$PAGE->set_category_by_id()`,
   which reads the raw record and checks nothing, so a category the viewer may not see is never
   named;
@@ -276,9 +281,26 @@ core's own deletion is the audited act.
 - **Moving contents out of a category.** `delete_move()` moves the children and courses under the
   new parent; the children keep their own rows, but the deleted category's own unlisted (or
   public) state stops applying to what it held, which follows the new parent's path from then on:
-  under a listed parent it is listed. The same holds for any move of a course or a category by a
-  holder of `moodle/category:manage` (the management page's bulk move, a change of parent): the
-  plugin does not observe moves, and `managecategorystate` guards the state row, not the tree.
+  under a listed parent it is listed.
+- **A deletion with move publishes nothing** (`local\delete_move_guard`). A public row below an
+  unlisted or hidden category is inert, and the move can make it effective without anybody
+  holding a publish capability deciding it. `local_unlistedcourses_pre_course_category_delete_move()`
+  only records, in two statements by `{course_categories}.path` and the public predicates, the
+  course and category ids in the subtree whose own row is public and which are not public now; it
+  writes nothing, because core can still abort. The `course_category_deleted` observer, after the
+  category's row is dropped and the caches are reset, asks `are_public()` again for those ids, and
+  takes each one that is public now back to listed through `discoverability::unpublish_after_move()`
+  / `category_discoverability::unpublish_after_move()`: `set_state()`'s own write under the state
+  lock, firing `course_state_updated` / `category_state_updated` with the deleting user, and asking
+  no capability (a restriction, under that user's `moodle/category:manage`). Those two methods
+  write nothing but public to listed. A row the move leaves inert and a row that was effective
+  before the deletion are not touched. The record is per-request static state, from the callback to
+  the event in the same request; an event without `contentmovedcategoryid` (`delete_full()`) drops
+  it unread.
+- **Other moves are not observed.** A move of a course or a category by a holder of
+  `moodle/category:manage` outside a deletion (the management page's bulk move, a change of
+  parent) follows its new path, and a public row that was inert can start to apply:
+  `managecategorystate` guards the state row, not the tree.
 
 ### 1.7 Privacy
 
@@ -319,9 +341,9 @@ the table from the context it is handed.
 
 | Method | Contract |
 |---|---|
-| `discoverability::get_states(array $courseids): array` | `courseid => STATE_*`. One query for every id not already known in the request; a missing row is listed. The right shape for a page of courses. |
+| `discoverability::get_states(array $courseids): array` | `courseid => STATE_*`. One query for every id not already known in the request, one per `local\id_chunks::SIZE` (20,000) ids past that; a missing row is listed. The right shape for a page of courses. |
 | `discoverability::get_state(int)`, `is_unlisted(int)` | One course, through `get_states()`. The state only - not whether this viewer may still discover it. |
-| `discoverability::state_sql(string $coursealias, string $alias = 'lus'): array` | `['join' => LEFT JOIN ..., 'column' => COALESCE(state, 0)]` for a statement of your own over `{course}`. **The only way to read the state of a population**: `get_states()` puts the ids in one `IN` list and `get_in_or_equal()` never chunks. No parameters. Both aliases must be plain lowercase identifiers and must differ, or it throws. Compare the column with `= STATE_PUBLIC` on an anonymous surface, never with `<> STATE_UNLISTED`, so an unknown stored value fails closed. |
+| `discoverability::state_sql(string $coursealias, string $alias = 'lus'): array` | `['join' => LEFT JOIN ..., 'column' => COALESCE(state, 0)]` for a statement of your own over `{course}`. **The way to read the state of a population**: `get_states()` ships every id as a bind parameter and pays a statement per 20,000 of them. No parameters. Both aliases must be plain lowercase identifiers and must differ, or it throws. Compare the column with `= STATE_PUBLIC` on an anonymous surface, never with `<> STATE_UNLISTED`, so an unknown stored value fails closed. |
 | `discoverability::get_creation_default()`, `get_restore_default()` | The two settings, read as listed when unset or invalid. |
 | `category_discoverability::get_states(array)`, `get_state(int)`, `is_unlisted(int)` | The category's **own** row only; an ancestor's state is not consulted here. |
 | `category_discoverability::unlisted_ids(): int[]` | Every category whose own row is unlisted, ascending. One query per request. This is the empty-set fast path of the whole category predicate. |
@@ -482,7 +504,7 @@ here.
 
 ```php
 access::get_next_action(int $courseid): array;          // Asks each enrol plugin; memoised per viewer.
-access::get_next_actions(array $courseids): array;      // A page of courses in at most four statements.
+access::get_next_actions(array $courseids): array;      // A page of courses in at most four statements (up to 20,000 ids).
 ```
 
 What `$USER` may do now to join the course, **independent of the relationship**: a viewer who is
@@ -560,7 +582,7 @@ in the way.
 | Drops | nothing | `enrol/self:enrolself` and the autoenrol rule, which SQL cannot read |
 | May differ | - | may answer `open` where the per-course form answers `blocked`, **never the reverse** |
 | `opens` | as above | checks the self enrolment capability before dating and never dates an autoenrol instance with a rule, so it may answer `null` where the per-course form dates, **never the reverse** |
-| Input | one course | a **page** of courses: the ids go into one `IN` list and `get_in_or_equal()` does not chunk |
+| Input | one course | a **page** of courses: up to 20,000 ids go into one `IN` list; a longer list stays correct and pays statements 1 and 4 once per 20,000 |
 
 Two rules follow:
 
