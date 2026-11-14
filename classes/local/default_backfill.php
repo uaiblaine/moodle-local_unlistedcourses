@@ -198,20 +198,23 @@ class default_backfill {
     }
 
     /**
-     * Queue the backfill for the current default, unless one is already queued.
+     * Queue the backfill for the current default, or return null and queue nothing.
      *
      * The page calls this after its sesskey check, with the cutoff its confirmation showed;
-     * it writes no course state itself. Two checks it can make itself are made here rather
-     * than left to the caller: the user asking must hold moodle/site:config, the page's own
-     * capability, because the task records them on every row it writes and runs with nobody
-     * logged in; and the cutoff must still be the current one, because the administrator
-     * confirmed the count of courses created before that date, and a default saved again
-     * since would move it.
+     * it writes no course state itself, and it does not count the courses: a default that
+     * has no course left to reach still queues a task, which then changes nothing. Two checks
+     * it can make itself are made here rather than left to the caller: the user asking must
+     * hold moodle/site:config, the page's own capability, because the task records them on
+     * every row it writes and runs with nobody logged in; and the cutoff must still be the
+     * current one, because the administrator confirmed the count of courses created before
+     * that date, and a default saved again since would move it. The capability is checked
+     * first, so a user who lacks it gets the exception even when the default is listed.
      *
      * @param int $userid The administrator asking for it, recorded as the one who changed each course.
      * @param int $cutoff The cutoff the confirmation showed.
-     * @return apply_default_state|null The queued task, or null when the default is listed, a task is
-     *     already queued, or the cutoff is no longer the current one.
+     * @return apply_default_state|null The queued task, with its id set; null, with nothing queued, when
+     *     the default is listed, a backfill task is already queued or running, the cutoff is no longer the
+     *     current one, or the adhoc task manager declined to queue the task.
      * @throws \required_capability_exception When the user may not configure the site.
      */
     public static function queue(int $userid, int $cutoff): ?apply_default_state {
