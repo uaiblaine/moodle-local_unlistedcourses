@@ -148,16 +148,26 @@ category on its path: an anonymous visitor can satisfy none of the three terms.
 ## Where the state is written
 
 Four writers, one check. The course settings form gains a "Discoverability" select right
-after "Course visibility", offered to whoever may set course visibility; the "Public"
-option appears only for a user who may publish, and a course that is already public shows
-the control frozen **with its value still submitting**, so saving an unrelated change never
-un-publishes it. The value is persisted from the `after_form_submission` hook, which core
-dispatches from `create_course()` and `update_course()` - so the web service and
-`tool_uploadcourse` reach the same `set_state()`, and the same capability check. Course
-backup carries the state, for every course; a restore writes it through the same
-`set_state()`, so a restoring user who may not publish is refused there, the refusal is
-logged, and the target keeps the state it had. Nobody consents to publishing a course by
-restoring a backup.
+after "Course visibility", added from core's `after_form_definition` hook and offered to whoever
+may set course visibility; the "Public" option appears only for a user who may publish, and a
+course that is already public shows the control frozen **with its value still submitting**, so
+saving an unrelated change never un-publishes it. The value is persisted from the
+`after_form_submission` hook, which core dispatches from `create_course()` and `update_course()` -
+so the web service and `tool_uploadcourse` reach the same `set_state()`, and the same capability
+check. Course backup carries the state, for every course; a restore writes it through the same
+`set_state()`, against the restoring user. A restorer who may not publish cannot publish through a
+restore: the refusal is written to the restore log as a warning ("The course was public in the
+backup, but the user restoring it may not publish courses here", or, for another state, "The
+discoverability state in the backup was not applied") and the target keeps the state it had. A
+restorer who holds `local/unlistedcourses:publish` keeps the backup's public state, exactly as
+they could set it by hand. A restore that finds somebody else saving the target course's state
+for the whole of the wait below leaves that state alone, logs a warning saying so, and restores
+the rest of the course.
+
+Every change is read, decided and written under a core lock on that course or category, so two
+people saving the same one at the same moment are served one after the other, each deciding on
+what the other wrote; a call that changes nothing takes no lock. A writer still waiting after
+five seconds is refused with a message asking them to try again, and writes nothing.
 
 ### Defaults for new courses
 
@@ -207,8 +217,10 @@ changed again before it ran, and fires `course_state_updated` for every course i
 the administrator who queued it as the user. Running it again changes nothing.
 
 A category's state is written from one page, `local/unlistedcourses/category.php`, reached
-from the category's settings menu (the "More" menu of a category page): core dispatches no
-hook from the category form and has no custom field handler for categories. The page shows
+from the category's settings menu (the "More" menu of a category page), where the plugin's
+`local_unlistedcourses_extend_settings_navigation()` callback puts it for a holder of
+`local/unlistedcourses:managecategorystate`: core dispatches no hook from the category form and
+has no custom field handler for categories. The page shows
 who will still see the category - the cohorts defined at it, behind `moodle/cohort:view`,
 the people holding a role here or above, and how many people it stays visible to besides
 staff, intersected over every unlisted category above it - and warns when that is nobody and
@@ -218,7 +230,9 @@ Moodle has no category backup a plugin could attach to.
 Its form follows the course form exactly: the "Public" option is offered only to a user
 holding `local/unlistedcourses:publishcategory`, and a category that is already public shows
 the control frozen with its value still submitting, so saving an unrelated change never
-un-publishes it and never fails over a value the editor did not touch. For a public category
+un-publishes it and never fails over a value the editor did not touch. A save whose value the
+form no longer offers - the category was changed by somebody else since the page was shown -
+writes nothing and says so, rather than reading the missing value as listed. For a public category
 the page replaces the cohort and role accounting with what a visitor will be served, and
 warns when an unlisted or hidden category on the path makes the public state inert.
 
@@ -227,9 +241,16 @@ warns when an unlisted or hidden category on the path makes the public state ine
 A course's row is dropped by an observer of `\core\event\course_deleted`, not by the
 `before_course_deleted` hook: with asynchronous course deletion core runs the hook when the
 deletion is requested and the course goes on existing, hidden, until the cron deletes it, and
-the state must stay with it until then. A category's row is dropped from the
-`pre_course_category_delete` and `pre_course_category_delete_move` callbacks in `lib.php`; when
-a category's contents are moved, its children keep their own states.
+the state must stay with it until then. A category's row is dropped the same way, by an observer
+of `\core\event\course_category_deleted`, which core fires once per category after it is gone:
+a deletion core aborts half-way, such as one that meets a course with a backup pending, leaves
+every category it did not delete with its state.
+
+When a category is deleted with its contents moved, its children keep their own states, but the
+deleted category's own unlisted (or public) state stops applying to what it held: the courses and
+subcategories follow the new parent's path from then on, so under a listed parent they are listed.
+The same holds for any move of a course or a category by a holder of `moodle/category:manage`; the
+plugin does not observe moves.
 
 ## What this plugin does not do
 
@@ -258,6 +279,11 @@ logged-in browser session can call it), the mobile app, the Navigation block,
 `block_course_list`, Boost Union smart menus, the report builder's category entity and the
 course request page all name a category by their own route - and is written down, with what to
 do about each, in [the developer guide](docs/developer-guide.md#73-it-does-not-cover-every-surface).
+Two more name an unlisted **course** to people with no relationship with it: core's
+user profile page, whose "Course details" lists every course the user is enrolled in to anybody
+core lets view that profile (hiding *My courses* through the `hiddenuserfields` setting removes it,
+for listed courses too; a theme can cover the page instead), and the global search's course area,
+which asks only core's visibility of the course.
 Unlisting is a listing rule, not a permission.
 
 ## Consequences worth knowing
