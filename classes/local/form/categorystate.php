@@ -103,4 +103,29 @@ class categorystate extends \moodleform {
 
         $this->add_action_buttons(true, get_string('savechanges'));
     }
+
+    /**
+     * Write the state a submission carries, or refuse a submission that carries none.
+     *
+     * On submit the options are rebuilt from the state stored NOW, and the select keeps
+     * only a posted value that is one of them. A form opened on a public category by
+     * somebody who may not publish posts 2 from its frozen control; when a publisher has
+     * unlisted the category in the meantime, 2 is no longer an option, core drops it, and
+     * the data carries no state at all. Cast to an int, that absence would read as listed
+     * and un-hide a category nobody chose to un-hide. Nothing is written instead, as the
+     * course side writes nothing for an absent element
+     * ({@see \local_unlistedcourses\local\courseform::save()}).
+     *
+     * @param int $categoryid The category id.
+     * @param \stdClass $data The data get_data() returned.
+     * @return bool False when the submission carried no state, and nothing was written.
+     * @throws \required_capability_exception When set_state() refuses the change.
+     */
+    public static function save(int $categoryid, \stdClass $data): bool {
+        if (!isset($data->state)) {
+            return false;
+        }
+        category_discoverability::set_state($categoryid, (int) $data->state);
+        return true;
+    }
 }

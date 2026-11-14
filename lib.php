@@ -17,11 +17,10 @@
 /**
  * Course discoverability - Plugin callbacks core looks up by name
  *
- * Only the callbacks that have no hook equivalent live here. Course deletion
- * goes through the course_deleted event (db/events.php); category
- * deletion has no hook and is announced through the two legacy callbacks
- * below, which core_course_category::delete_full() and delete_move() find
- * through get_plugins_with_function().
+ * Only the callbacks that have no hook equivalent live here. Course and
+ * category deletion go through the course_deleted and course_category_deleted
+ * events (db/events.php), never through the pre-delete callbacks: core runs
+ * those before the deletion is certain ({@see \local_unlistedcourses\observer}).
  *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine
@@ -29,36 +28,6 @@
  */
 
 use local_unlistedcourses\category_discoverability;
-
-/**
- * A category is about to be deleted together with its contents.
- *
- * Core passes the category's database record. delete_full() recurses into
- * the children and calls this once per category, so nothing here walks the
- * subtree.
- *
- * @param stdClass $category The category record being deleted.
- * @return void
- */
-function local_unlistedcourses_pre_course_category_delete($category): void {
-    category_discoverability::on_category_deleted((int) $category->id);
-}
-
-/**
- * A category is about to be deleted with its contents moved to another category.
- *
- * Core passes the core_course_category object and the new parent. The
- * children and courses survive under the new parent, whose own state - if
- * any - is what applies to them from then on; only the deleted category's row
- * goes.
- *
- * @param core_course_category $category The category being deleted.
- * @param core_course_category $newparentcat The category receiving its contents.
- * @return void
- */
-function local_unlistedcourses_pre_course_category_delete_move($category, $newparentcat): void {
-    category_discoverability::on_category_deleted((int) $category->id);
-}
 
 /**
  * Put the category discoverability page in a course category's settings menu.

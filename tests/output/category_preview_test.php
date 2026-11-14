@@ -449,6 +449,164 @@ final class category_preview_test extends \advanced_testcase {
     }
 
     /**
+     * A member of two cohorts at the category is one person, in the headline as in neither cohort's own count.
+     *
+     * @return void
+     */
+    public function test_a_member_of_two_cohorts_counts_once(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $generator = $this->getDataGenerator();
+
+        $category = $generator->create_category();
+        $context = \core\context\coursecat::instance($category->id);
+        $first = $this->create_cohort_at($context, 'First');
+        $second = $this->create_cohort_at($context, 'Second');
+        $both = $generator->create_user();
+        $this->add_to_cohort((int) $first->id, (int) $both->id);
+        $this->add_to_cohort((int) $second->id, (int) $both->id);
+        $this->add_to_cohort((int) $first->id, (int) $generator->create_user()->id);
+
+        $data = $this->export($category, $context);
+        $members = array_column($data['cohorts'], 'members', 'name');
+        $this->assertSame(['First' => 2, 'Second' => 1], $members, 'Each cohort counts its own members.');
+        $this->assertSame(2, $data['visiblecount'], 'Summing the cohorts would read 3.');
+    }
+
+    /**
+     * Somebody holding roles at two categories on the path is one role holder.
+     *
+     * @return void
+     */
+    public function test_roles_at_two_categories_on_the_path_make_one_role_holder(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $generator = $this->getDataGenerator();
+
+        $parent = $generator->create_category();
+        $category = $generator->create_category(['parent' => $parent->id]);
+        $context = \core\context\coursecat::instance($category->id);
+        $twice = $generator->create_user();
+        $this->assign_role('manager', (int) $twice->id, \core\context\coursecat::instance($parent->id));
+        $this->assign_role('editingteacher', (int) $twice->id, $context);
+        $this->assign_role_user('teacher', (int) $category->id);
+
+        $data = $this->export($category, $context);
+        $this->assertSame(2, $data['roleholders'], 'Counting the assignments would read 3.');
+        $this->assertSame(2, $data['visiblecount']);
+    }
+
+    /**
+     * A role held below an unlisted ancestor does not open it, so it does not count towards this category.
+     *
+     * The child's own term admits a role at the child, but the parent's term reads the path only up to
+     * the parent: that person is reached here and withheld above.
+     *
+     * @return void
+     */
+    public function test_a_role_below_an_unlisted_ancestor_is_not_counted(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $generator = $this->getDataGenerator();
+
+        $parent = $generator->create_category();
+        $child = $generator->create_category(['parent' => $parent->id]);
+        $childcontext = \core\context\coursecat::instance($child->id);
+        category_discoverability::set_state((int) $parent->id, category_discoverability::STATE_UNLISTED);
+        category_discoverability::set_state((int) $child->id, category_discoverability::STATE_UNLISTED);
+
+        $this->assign_role_user('teacher', (int) $child->id);
+        $data = $this->export($child, $childcontext);
+        $this->assertSame(1, $data['roleholders'], 'Precondition: the role at the child is on the child\'s path.');
+        $this->assertSame(0, $data['visiblecount'], 'A role below the unlisted parent opens nothing there.');
+
+        // Control: a role at the parent satisfies both terms.
+        $this->assign_role_user('teacher', (int) $parent->id);
+        $this->assertSame(1, $this->export($child, $childcontext)['visiblecount']);
+    }
+
+    /**
+     * With no cohort and no role anywhere on the path, every figure is zero, unlisted ancestor or not.
+     *
+     * @return void
+     */
+    public function test_no_cohort_and_no_role_count_nobody(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $generator = $this->getDataGenerator();
+
+        $parent = $generator->create_category();
+        $child = $generator->create_category(['parent' => $parent->id]);
+        $childcontext = \core\context\coursecat::instance($child->id);
+        category_discoverability::set_state((int) $child->id, category_discoverability::STATE_UNLISTED);
+
+        $data = $this->export($child, $childcontext);
+        $this->assertSame([0, 0, []], [$data['roleholders'], $data['visiblecount'], $data['cohorts']]);
+        $this->assertTrue($data['nobodywarning']);
+
+        category_discoverability::set_state((int) $parent->id, category_discoverability::STATE_UNLISTED);
+        $data = $this->export($child, $childcontext);
+        $this->assertTrue($data['ancestorunlisted'], 'Precondition: the ancestor term is read too.');
+        $this->assertSame([0, 0], [$data['roleholders'], $data['visiblecount']]);
+
+        // Control: one member of both cohorts is counted through the same statements.
+        $person = $generator->create_user();
+        $this->add_to_cohort((int) $this->create_cohort_at($childcontext, 'Here')->id, (int) $person->id);
+        $parentcohort = $this->create_cohort_at(\core\context\coursecat::instance($parent->id), 'Above');
+        $this->add_to_cohort((int) $parentcohort->id, (int) $person->id);
+        $this->assertSame(1, $this->export($child, $childcontext)['visiblecount']);
+    }
+
+    /**
+     * The figures cost the same statements for two eligible people and for forty.
+     *
+     * Each export runs once to warm the context and string caches before the metered one, with the
+     * plugin's request memos reset in between, so both meters read the same work.
+     *
+     * @return void
+     */
+    public function test_the_figures_cost_the_same_statements_for_two_people_and_for_forty(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $generator = $this->getDataGenerator();
+
+        $parent = $generator->create_category();
+        $child = $generator->create_category(['parent' => $parent->id]);
+        $parentcontext = \core\context\coursecat::instance($parent->id);
+        $childcontext = \core\context\coursecat::instance($child->id);
+        category_discoverability::set_state((int) $parent->id, category_discoverability::STATE_UNLISTED);
+        category_discoverability::set_state((int) $child->id, category_discoverability::STATE_UNLISTED);
+        $above = $this->create_cohort_at($parentcontext, 'Above');
+        $here = $this->create_cohort_at($childcontext, 'Here');
+        $add = function (int $count) use ($generator, $above, $here, $childcontext): void {
+            for ($i = 0; $i < $count; $i++) {
+                $user = $generator->create_user();
+                $this->add_to_cohort((int) $above->id, (int) $user->id);
+                $this->add_to_cohort((int) $here->id, (int) $user->id);
+                $this->assign_role('teacher', (int) $user->id, $childcontext);
+            }
+        };
+        $metered = function () use ($child, $childcontext, $DB): array {
+            $this->export($child, $childcontext);
+            category_discoverability::reset_caches();
+            $before = $DB->perf_get_reads();
+            $data = $this->export($child, $childcontext);
+            return [$data, $DB->perf_get_reads() - $before];
+        };
+
+        $add(2);
+        [$small, $smallreads] = $metered();
+        $add(38);
+        [$large, $largereads] = $metered();
+
+        $this->assertSame([2, 2], [$small['visiblecount'], $small['roleholders']], 'Precondition: the small set is counted.');
+        $this->assertSame([40, 40], [$large['visiblecount'], $large['roleholders']], 'Precondition: the large set is counted.');
+        $this->assertSame($smallreads, $largereads, 'The figures must not cost more statements for more people.');
+    }
+
+    /**
      * 'nobodywarning' is true only while the category is unlisted and nobody besides staff
      * would see it; a member clears it, and a listed category never shows it at all.
      *

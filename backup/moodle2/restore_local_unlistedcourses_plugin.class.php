@@ -23,18 +23,27 @@
  */
 
 use local_unlistedcourses\discoverability;
+use local_unlistedcourses\local\state_busy_exception;
 
 /**
  * Restores the discoverability state into the target course.
  *
  * The write goes through set_state() like every other writer, so the publish
  * capability is checked there, against the restoring user - the task's user,
- * not $USER - in the target course. Nobody consents to publishing a course by
- * restoring a backup: when set_state() refuses, the target keeps the state it
+ * not $USER - in the target course. A restorer without it cannot publish
+ * through a restore: when set_state() refuses, the target keeps the state it
  * already had (for a new course, the restore default; whatever it was for an
- * overwrite) and the refusal is logged. There is deliberately no clamp of an incoming public
+ * overwrite) and the refusal is logged. A restorer who holds it keeps the
+ * backup's public state, exactly as they could set it by hand on the course
+ * form. There is deliberately no clamp of an incoming public
  * state to listed ahead of that call: on an overwrite restore into an unlisted
  * course, such a clamp would turn a refusal into an un-hiding write.
+ *
+ * A write that finds the course's state held by another writer past the lock's
+ * wait ({@see \local_unlistedcourses\local\state_lock}) is logged as well and
+ * leaves the state as that writer leaves it: the rest of the course must still
+ * restore. Only an existing course can meet one; nobody else can name a new
+ * course's id yet.
  *
  * The element is written for every course ({@see backup_local_unlistedcourses_plugin}),
  * so the state follows the rule core applies to the visible flag - with one
@@ -102,6 +111,10 @@ class restore_local_unlistedcourses_plugin extends restore_local_plugin {
         } catch (\required_capability_exception $e) {
             $key = ($state === discoverability::STATE_PUBLIC) ? 'restore_publicclamped' : 'restore_statenotapplied';
             $this->task->log(get_string($key, 'local_unlistedcourses'), backup::LOG_WARNING);
+        } catch (state_busy_exception $e) {
+            /* Somebody else was writing this course's state for the whole wait. The rest of the
+               course must still restore: the state is left as that writer leaves it, and said so. */
+            $this->task->log(get_string('restore_statebusy', 'local_unlistedcourses'), backup::LOG_WARNING);
         }
     }
 
