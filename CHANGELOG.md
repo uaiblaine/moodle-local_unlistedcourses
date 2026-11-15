@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Version `2026100511`: report builder data sources; no database changes.
+
+### Added
+
+- Two data sources for custom reports, "Courses and their discoverability" and "Course
+  categories and their discoverability". Each lists every course (the site home aside) or every
+  category with its state, the effect of a public state (in effect, or held back by a hidden
+  course or category, an unlisted category above it or a hidden category above it), the user who
+  last changed the state and when; the course one also carries the state of the course's
+  category. The effect is the answer of `is_public()`, computed in SQL so a report can filter
+  and sort by it, which gives managers a way to follow public states that a category above holds
+  back. The data sources list what core's Courses data source lists, to the report's audience,
+  and add no capability.
+
 Versions `2026100509` and `2026100510`: the fixes of the 2026-11-13 audit (`db/events.php` gains
 an observer) and the notes the 2026-11-04 security review left open (`lib.php` gains the
 `pre_course_category_delete_move` callback); no database changes.
