@@ -35,7 +35,7 @@ the course's visibility; Public is offered only to someone allowed to publish.
 A category's state is set on a page of its own in the category's navigation, with a preview of
 who still sees the category while it is unlisted.
 
-![The plugin's settings page: Default discoverability for new courses and Discoverability of a restored course whose backup has none, both set to Unlisted, with the link to apply the default to existing courses](https://raw.githubusercontent.com/uaiblaine/moodle-local_unlistedcourses/MOODLE_502_STABLE/docs/screenshots/settings.png)
+![The plugin's settings page: Default discoverability for new courses and Discoverability of a restored course whose backup has none, both set to Unlisted, with the button that applies the default to existing courses between them](https://raw.githubusercontent.com/uaiblaine/moodle-local_unlistedcourses/MOODLE_502_STABLE/docs/screenshots/settings.png)
 
 The two defaults, and the link to apply the default to the courses that predate it.
 
@@ -235,7 +235,7 @@ a web service call, a CSV upload or a restore run by somebody without it would b
 
 The default reaches a course only when it is created, so the courses a site already had when the
 plugin was installed, or when an administrator chose unlisted as the default, stay listed. The
-settings page links to *Apply the default to existing courses*
+settings page has an *Apply to existing courses* button, under the default, for a page
 (`local/unlistedcourses/applydefault.php`, site administrators only, `moodle/site:config`), which
 counts the courses the default would reach, asks for confirmation, and queues an adhoc task; the
 page itself writes nothing, and the task runs with the next cron, showing its progress on the page.
@@ -445,7 +445,7 @@ Under *Site administration > Plugins > Local plugins > Course discoverability*, 
 
 Each offers listed or unlisted; public is never a choice.
 
-Below the first one, a link to the page that applies it to existing courses, described in
+Below the first one, a button to the page that applies it to existing courses, described in
 [Applying the default to existing courses](#applying-the-default-to-existing-courses).
 
 ## Capabilities
