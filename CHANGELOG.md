@@ -4,7 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## v5.3-r5 (2026100512) - 2026-11-15
+
+Report builder data sources for the discoverability states, a deletion with its contents moved
+that publishes nothing, a core lock around state writes, id lists read in chunks, and a button on
+the settings page. No database changes.
 
 Versions `2026100511` and `2026100512`: report builder data sources and the settings page's apply
 button; no database changes.
