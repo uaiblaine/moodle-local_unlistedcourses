@@ -120,6 +120,7 @@ class categorystate extends \moodleform {
      * @param \stdClass $data The data get_data() returned.
      * @return bool False when the submission carried no state, and nothing was written.
      * @throws \required_capability_exception When set_state() refuses the change.
+     * @throws \local_unlistedcourses\local\state_busy_exception When another writer holds the category's lock past the timeout.
      */
     public static function save(int $categoryid, \stdClass $data): bool {
         if (!isset($data->state)) {

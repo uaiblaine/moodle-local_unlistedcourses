@@ -434,8 +434,9 @@ class category_access {
     /**
      * The unlisted categories the viewer holds a cohort membership at.
      *
-     * One query over every unlisted id, memoised for the viewer. The cohort
-     * context must be the category's own; see the class docblock.
+     * One query over every unlisted id, and one per {@see local\id_chunks::SIZE} of
+     * them beyond that, memoised for the viewer. The cohort context must be the
+     * category's own; see the class docblock.
      *
      * @param array $unlisted The ids of every unlisted category.
      * @return array The subset of them the viewer holds a cohort membership at.
@@ -448,20 +449,28 @@ class category_access {
             return self::$cohortcats[$viewer];
         }
 
-        [$insql, $params] = $DB->get_in_or_equal($unlisted, SQL_PARAMS_NAMED, 'cat');
         /* {cohort_members} directly, never cohort_get_user_cohorts(): that helper
-           filters c.visible = 1, and an invisible cohort still grants. */
-        $sql = "SELECT DISTINCT ctx.instanceid
-                  FROM {cohort_members} cm
-                  JOIN {cohort} c ON c.id = cm.cohortid
-                  JOIN {context} ctx ON ctx.id = c.contextid
-                 WHERE cm.userid = :userid
-                   AND ctx.contextlevel = :contextlevel
-                   AND ctx.instanceid $insql";
-        $params['userid'] = $viewer;
-        $params['contextlevel'] = CONTEXT_COURSECAT;
+           filters c.visible = 1, and an invisible cohort still grants. Keyed by the
+           category id, so the chunks merge without one dropping another's answer. */
+        $found = local\id_chunks::read(
+            $unlisted,
+            function (array $chunk) use ($DB, $viewer): array {
+                [$insql, $params] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED, 'cat');
+                $sql = "SELECT DISTINCT ctx.instanceid
+                          FROM {cohort_members} cm
+                          JOIN {cohort} c ON c.id = cm.cohortid
+                          JOIN {context} ctx ON ctx.id = c.contextid
+                         WHERE cm.userid = :userid
+                           AND ctx.contextlevel = :contextlevel
+                           AND ctx.instanceid $insql";
+                $params['userid'] = $viewer;
+                $params['contextlevel'] = CONTEXT_COURSECAT;
+                $ids = array_map('intval', $DB->get_fieldset_sql($sql, $params));
+                return array_combine($ids, $ids);
+            }
+        );
 
-        self::$cohortcats[$viewer] = array_map('intval', $DB->get_fieldset_sql($sql, $params));
+        self::$cohortcats[$viewer] = array_keys($found);
         return self::$cohortcats[$viewer];
     }
 
