@@ -56,6 +56,10 @@ an observer) and the notes the 2026-11-04 security review left open (`lib.php` g
 
 ### Changed
 
+- The README ("Moving a course or a category publishes what was held back") and the help of the
+  category discoverability control say plainly that a plain move is not observed: a public state
+  held back by an unlisted or hidden category applies again once the course or category is moved
+  to a path that serves it.
 - The category discoverability page counts who still sees the category in the database: the
   people holding a role on the path and the people the category stays visible to are each one
   `COUNT(DISTINCT)` statement, the second one testing each unlisted category above in SQL, where the
