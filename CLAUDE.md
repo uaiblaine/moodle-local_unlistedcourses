@@ -158,6 +158,16 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   on. So the course row and the whole category path are checked directly, with no
   capability involved. A missing ancestor fails closed. It is a property of the course, not
   the viewer, unlike everything in `access`.
+- **The report builder's effect column is `are_public()` written as SQL**
+  (`reportbuilder\local\helpers\public_effect`), because a custom report filters and sorts in the
+  database. It reads "every category on the path exists and is visible" as "as many visible rows
+  match the path as `depth` says", with no bind parameter (a column's SQL is repeated in GROUP BY).
+  `tests/reportbuilder/` holds it to both `are_public()` methods case by case and
+  `mutations/reportbuilder.conf` holds its terms; change the composition in both places. The data
+  sources list core's population (every course but the site course) to the report's audience and
+  apply no rule of `access`.
+  Never build its path match with `sql_like()`: it wants a bound pattern and raises a debugging
+  notice over an expression, which only the stress tests (always on here, unlike core's) showed.
 - **`access` still reads the state through `discoverability::get_states()`**, one query per
   request; `access::reset_caches()` resets both caches, and `set_state()` calls it.
 - **Restore goes through `set_state()` and nothing else — no clamp ahead of it.** The

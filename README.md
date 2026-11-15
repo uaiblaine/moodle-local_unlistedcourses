@@ -388,6 +388,33 @@ make the listing time-dependent.
 A public course is armed but inert until the site's theme gives it a landing page: the
 plugin only says "may be served anonymously", it serves nothing itself.
 
+## Reporting
+
+Two data sources for Moodle's custom reports (*Site administration > Reports > Report builder >
+Custom reports*) list what the two tables hold, so a manager can follow which courses and
+categories are unlisted or public without opening each one:
+
+- **Courses and their discoverability** - every course except the site home, with core's course
+  and category columns and, from this plugin: the course's state (listed, unlisted, public), the
+  effect of a public state, the user who last changed the state and when, and the state of the
+  category the course sits in.
+- **Course categories and their discoverability** - every category with the same columns for
+  the category's own state.
+
+The effect column says whether a public state is in effect (the page is served to visitors) or
+held back, and by what: the course or category is hidden, a category above it is unlisted, or a
+category above it is hidden. It is the answer `discoverability::is_public()` and
+`category_discoverability::is_public()` give, computed in the database so a report can filter and
+sort by it. A report with the condition "Effect of the public state" set to one of the held-back
+values lists the public states that would start being served if the course or category were
+moved or the category above it changed, which the plugin does not watch for on a plain move.
+
+The data sources add no capability and apply none of the plugin's rules about the viewer. Like
+core's own Courses data source they list every course, unlisted ones included, to whoever is in
+the report's audience, and the name of the user who last changed a state follows core's user
+entity. Who may create a report is core's `moodle/reportbuilder:edit`; give such a report an
+audience of managers.
+
 ## For developers
 
 [`docs/developer-guide.md`](docs/developer-guide.md) is the technical guide for theme and plugin
@@ -440,6 +467,9 @@ the plugin is uninstalled. A course backup carries the course's state and nothin
 it. The two settings above are site configuration. Each state change fires an event
 (`course_state_updated`, `category_state_updated`), which the site's log stores keep under their
 own retention and privacy rules. The plugin stores no files and no user preferences.
+
+The report builder data sources described under [Reporting](#reporting) read both tables and
+store nothing.
 
 The only personal data is `usermodified`, and the Privacy API covers it; a row written by the task
 that applies the default to existing courses records the administrator who queued it there, as any

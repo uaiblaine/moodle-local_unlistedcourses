@@ -615,6 +615,25 @@ Two rules follow:
 
 ---
 
+### 2.8 Custom reports
+
+`classes/reportbuilder/` exposes both tables to the report builder: the entities
+`course_state` and `category_state` (columns and filters `state`, `effect`, `timemodified`) and
+the data sources `datasource\courses` and `datasource\categories`, which join core's course,
+category and user entities. Another plugin's data source can add either entity: hand it the
+aliases of `{course}` and `{course_categories}` with `set_table_alias()` and add the join
+`get_state_join()` returns.
+
+The `effect` column is the anonymous predicate of section 2.4 written as SQL
+(`reportbuilder\local\helpers\public_effect`), so that a report can filter, sort and count by
+it; `is_public()` and `are_public()` remain the answer a page asks. The expression reads "every
+category of the path exists and is visible" as "as many visible rows match the path as
+`course_categories.depth` says", and its tests hold it to `are_public()` over every way a public
+state is held back. A change to that composition is a change to both.
+
+The data sources apply no per-viewer rule: a report lists every course to its audience, as
+core's Courses data source does (section 7.3).
+
 ## 3. Category semantics
 
 ### 3.1 State is a property of the path
@@ -931,7 +950,7 @@ still name unlisted ones, include:
 | Navigation tree, course index drawer, `block_navigation`, the breadcrumb of a course page inside an unlisted category | Node builders run at page initialisation. |
 | `block_course_list` | Prints category names without a renderer call; do not place it. |
 | Boost Union smart menus listing courses | Cached per user; avoid course-listing smart menus over unlisted courses or categories. |
-| Report builder: the course category entity and categories datasource | Keep category columns out of reports shared beyond staff. |
+| Report builder: core's course and category entities and data sources, and this plugin's own (section 2.8) | A report lists every course and category to its audience. Keep reports that name them to an audience of staff. |
 | `course/request.php` | Names the requested category; keep course requests off, or the category listed. |
 | `block_myoverview` and other "my courses" surfaces | Name the category of the viewer's own courses, which they already keep. |
 | Course files through `pluginfile.php`, badge pages | Reach course names and files by their own route. |
