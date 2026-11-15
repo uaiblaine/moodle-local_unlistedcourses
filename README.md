@@ -325,10 +325,24 @@ the move leaves held back, keep their state. Before the move the plugin only rec
 states are held back; it acts after core has deleted the category, so a deletion core aborts
 changes no state.
 
-This covers deletion with its contents moved only. Any other move of a course or a category by a
-holder of `moodle/category:manage` (the management page's bulk move, a change of parent) is not
-observed: what is moved follows its new path, and a public state that was held back can start to
-apply.
+This covers deletion with its contents moved only.
+
+### Moving a course or a category publishes what was held back
+
+Any other move is not observed: a course moved to another category (from its settings page or
+with the management page's bulk move) and a category given another parent follow their new path
+from then on. Two consequences follow, and the second one is easy to miss:
+
+- What leaves an unlisted category is listed again, unless its own state says otherwise.
+- A course or category whose own state is **public** keeps that state while an unlisted or hidden
+  category above it holds it back, and it is served to visitors who are not logged in as soon as
+  a move takes it to a path that serves it. The person moving it needs only
+  `moodle/category:manage` (or `moodle/course:changecategory` for one course), not the capability
+  to publish, and the plugin logs nothing: the state row did not change.
+
+Before moving a course or a subcategory out of an unlisted or hidden category, check its own
+discoverability and set it to listed if it should not go public. Preparing courses as public
+inside an unlisted category and moving them out to publish them works for the same reason.
 
 ## What this plugin does not do
 
