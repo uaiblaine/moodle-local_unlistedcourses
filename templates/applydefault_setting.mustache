@@ -1,0 +1,60 @@
+{{!
+    This file is part of Moodle - http://moodle.org/
+
+    Moodle is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    Moodle is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
+{{!
+    @template local_unlistedcourses/applydefault_setting
+
+    The "Apply the default to existing courses" item of the settings page.
+
+    Rendered from local_unlistedcourses\local\admin\setting_applydefault. The row keeps the
+    markup of core_admin/setting_description, so the item lines up with the other settings.
+    Every string arrives already translated and in its plain spelling, escaped here by the
+    double stash it lands in.
+
+    Context variables required for this template - named in prose, because a Mustache
+    comment ends at its first closing pair and a tag written here would truncate it:
+
+    * title - string, the setting's title, shown in the label column.
+    * reach - string, the first paragraph: what the default does not reach.
+    * next - string, the second paragraph: what the confirmation page shows.
+    * url - string, the confirmation page's URL.
+    * action - string, the button's label.
+    * savefirst - string, the note beside the button.
+
+    Example context (json):
+    {
+        "title": "Apply the default to existing courses",
+        "reach": "The default above only reaches courses created from now on. Courses that already exist and never had a discoverability set stay Listed.",
+        "next": "The next page shows how many courses will change and asks for confirmation before changing any of them.",
+        "url": "https://example.com/local/unlistedcourses/applydefault.php",
+        "action": "Apply to existing courses",
+        "savefirst": "Save changes first: the action uses the saved default."
+    }
+}}
+<div class="form-item row">
+    <div class="form-label col-sm-3 text-sm-end">
+        <label>{{title}}</label>
+    </div>
+    <div class="form-setting col-sm-9">
+        <div class="form-text mt-0 mb-3">
+            <p class="mb-2">{{reach}}</p>
+            <p class="mb-0">{{next}}</p>
+        </div>
+        <div class="d-flex flex-wrap align-items-center gap-2">
+            <a class="btn btn-secondary" href="{{url}}">{{action}}</a>
+            <span class="text-muted small">{{savefirst}}</span>
+        </div>
+    </div>
+</div>
