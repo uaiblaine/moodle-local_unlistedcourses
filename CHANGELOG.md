@@ -21,8 +21,9 @@ Version `2026100511`: report builder data sources; no database changes.
   and add no capability.
 
 Versions `2026100509` and `2026100510`: the fixes of the 2026-11-13 audit (`db/events.php` gains
-an observer) and the notes the 2026-11-04 security review left open (`lib.php` gains the
-`pre_course_category_delete_move` callback); no database changes.
+an observer) and the notes the 2026-11-04 security review left open (`lib.php` drops the
+`pre_course_category_delete` callback, and `pre_course_category_delete_move` now only records);
+no database changes.
 
 ### Security
 
@@ -33,7 +34,9 @@ an observer) and the notes the 2026-11-04 security review left open (`lib.php` g
   public states below the category are held back, and once the category is deleted takes back to
   listed each of them the move made effective, logging the usual state-changed event under the
   deleting user. States that were effective before, and those the move leaves held back, are
-  untouched; a deletion core aborts changes nothing. Any other move is still not observed.
+  untouched; a deletion core aborts changes nothing. A row whose lock another writer still holds
+  after the five-second wait is skipped, stays public, and the skip is reported through
+  `debugging()`. Any other move is still not observed.
 - `category.php?id=0` (and any id below 1) is refused as an unknown category before anything is
   read. Core hands id 0 over as the top level, and the page then ended on a database error over
   the missing category context instead of its own refusal; `category_access::require_discoverable()`
@@ -44,7 +47,8 @@ an observer) and the notes the 2026-11-04 security review left open (`lib.php` g
   than 65,535 bind parameters in one statement) is read in chunks of 20,000 ids
   (`local\id_chunks`) by `get_states()`, `are_public()`, `filter_courses()`,
   `filter_courses_public()`, `filter_categories()`, `are_categories_discoverable()` and
-  `get_next_actions()`, where it failed. A list up to that size costs exactly the statements it
+  `get_next_actions()`, where it failed, and by the cohort lookup over the site's unlisted
+  categories inside `category_access`. A list up to that size costs exactly the statements it
   cost before.
 
 ### Fixed
@@ -70,6 +74,9 @@ an observer) and the notes the 2026-11-04 security review left open (`lib.php` g
 
 ### Changed
 
+- The help of the category discoverability control says that a public course held back by the
+  category is taken back to listed, not made public again, when the category is deleted with its
+  contents moved.
 - The README ("Moving a course or a category publishes what was held back") and the help of the
   category discoverability control say plainly that a plain move is not observed: a public state
   held back by an unlisted or hidden category applies again once the course or category is moved

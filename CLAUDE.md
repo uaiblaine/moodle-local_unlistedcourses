@@ -278,7 +278,7 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
 - **`enrol_apply` is absent from a fresh test site's `enrol_plugins_enabled`** —
   `add_apply_enrol()` in `access_test` enables it first.
 - **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds a hundred and
-  seventy-three guards, and each must redden a test. The apply, autoenrol and coursecompleted gates need a
+  seventy-four guards, and each must redden a test. The apply, autoenrol and coursecompleted gates need a
   stack that mounts those plugins: m503 and m503b mount all three (enrol_apply, autoenrol and
   coursecompleted). `mdl ci`, and so
   `mdl mutate --fast`, installs none of them, skips their tests and reads those gates as held
