@@ -21,6 +21,7 @@ use local_unlistedcourses\category_discoverability;
 use local_unlistedcourses\discoverability;
 use local_unlistedcourses\event\category_state_updated;
 use local_unlistedcourses\event\course_state_updated;
+use local_unlistedcourses\fixtures\state_lock_factory;
 use local_unlistedcourses\observer;
 use PHPUnit\Framework\Attributes\CoversClass;
 
@@ -369,6 +370,63 @@ final class delete_move_guard_test extends \advanced_testcase {
         \core_course_category::get($doomed->id, MUST_EXIST, true)->delete_full(false);
 
         $this->assertSame(discoverability::STATE_PUBLIC, $this->course_state((int) $course->id));
+    }
+
+    /**
+     * A public row whose lock another writer holds is skipped, stays public and is reported; a free one is demoted.
+     *
+     * The held lock is the fixture factory's ({@see state_lock_factory}): another holder that
+     * never lets go, which is what a timeout looks like. The control is a second deletion in the
+     * same test with every lock free, where the same kind of row goes back to listed.
+     *
+     * @return void
+     */
+    public function test_a_row_whose_lock_is_held_stays_public_and_is_reported(): void {
+        global $CFG;
+        require_once($CFG->dirroot . '/local/unlistedcourses/tests/fixtures/state_lock_factory.php');
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $target = $generator->create_category();
+        $doomed = $generator->create_category();
+        $child = $generator->create_category(['parent' => $doomed->id]);
+        $course = $generator->create_course(['category' => $doomed->id]);
+        $this->set_category_state((int) $doomed->id, category_discoverability::STATE_UNLISTED);
+        $this->set_category_state((int) $child->id, category_discoverability::STATE_PUBLIC);
+        $this->set_course_state((int) $course->id, discoverability::STATE_PUBLIC);
+
+        $CFG->lock_factory = '\\' . state_lock_factory::class;
+        state_lock_factory::reset();
+        state_lock_factory::$held = ['course_' . $course->id, 'category_' . $child->id];
+        $this->setUser($this->create_category_manager());
+        $this->start_log();
+        $this->assertTrue(\core_course_category::get($doomed->id, MUST_EXIST, true)->delete_move($target->id));
+
+        $this->assertSame((int) $target->id, (int) get_course($course->id)->category, 'Precondition: core moved the course.');
+        $this->assertTrue(discoverability::is_public((int) $course->id), 'Precondition: the move made it effective.');
+        $this->assertSame(discoverability::STATE_PUBLIC, $this->course_state((int) $course->id));
+        $this->assertSame(category_discoverability::STATE_PUBLIC, $this->category_state((int) $child->id));
+        $this->assertSame([], self::logged(course_state_updated::class));
+        $this->assertSame([], self::logged(category_state_updated::class));
+        $this->assertDebuggingCalledCount(2, [
+            "local_unlistedcourses: course {$course->id} was skipped after category {$doomed->id} was deleted with its "
+                . 'contents moved, because another writer held its lock; it kept its public state.',
+            "local_unlistedcourses: category {$child->id} was skipped after category {$doomed->id} was deleted with its "
+                . 'contents moved, because another writer held its lock; it kept its public state.',
+        ]);
+
+        // Control: the same kind of deletion with every lock free demotes the row and reports nothing.
+        state_lock_factory::reset();
+        $doomed2 = $generator->create_category();
+        $course2 = $generator->create_course(['category' => $doomed2->id]);
+        $this->set_category_state((int) $doomed2->id, category_discoverability::STATE_UNLISTED);
+        $this->set_course_state((int) $course2->id, discoverability::STATE_PUBLIC);
+        $this->start_log();
+        $this->assertTrue(\core_course_category::get($doomed2->id, MUST_EXIST, true)->delete_move($target->id));
+        $this->assertSame(discoverability::STATE_DEFAULT, $this->course_state((int) $course2->id));
+        $events = self::logged(course_state_updated::class);
+        $this->assertSame(discoverability::STATE_DEFAULT, $events[(int) $course2->id]['newstate']);
+        $this->assertDebuggingNotCalled();
+        state_lock_factory::reset();
     }
 
     /**

@@ -194,4 +194,49 @@ final class id_chunks_test extends \advanced_testcase {
         $kept = category_access::filter_categories(self::long_list((int) $listed->id, (int) $unlistedcat->id));
         $this->assertSame([0 => (int) $listed->id], $kept);
     }
+
+    /**
+     * A cohort opens its category when the site holds more unlisted categories than one statement takes.
+     *
+     * The cohort lookup is handed the id of every unlisted category. The control is a second
+     * unlisted category the viewer holds nothing at, which stays withheld.
+     *
+     * @return void
+     */
+    public function test_a_cohort_opens_its_category_among_more_unlisted_categories_than_a_statement_takes(): void {
+        global $CFG, $DB;
+        require_once($CFG->dirroot . '/cohort/lib.php');
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $opened = $generator->create_category();
+        $withheld = $generator->create_category();
+        $this->setAdminUser();
+        category_discoverability::set_state((int) $opened->id, category_discoverability::STATE_UNLISTED);
+        category_discoverability::set_state((int) $withheld->id, category_discoverability::STATE_UNLISTED);
+
+        $rows = [];
+        foreach (range(900000000, 900000000 + self::FILLER - 1) as $categoryid) {
+            $rows[] = (object) [
+                'categoryid' => $categoryid,
+                'state' => category_discoverability::STATE_UNLISTED,
+                'usermodified' => 0,
+                'timemodified' => 0,
+            ];
+        }
+        $DB->insert_records(category_discoverability::TABLE, $rows);
+
+        $user = $generator->create_user();
+        $cohort = $generator->create_cohort(['contextid' => \core\context\coursecat::instance($opened->id)->id]);
+        cohort_add_member($cohort->id, $user->id);
+
+        $this->setUser($user);
+        category_discoverability::reset_caches();
+        category_access::reset_caches();
+        access::reset_caches();
+        $this->assertSame(
+            [(int) $opened->id => true, (int) $withheld->id => false],
+            category_access::are_categories_discoverable([(int) $opened->id, (int) $withheld->id])
+        );
+    }
 }
