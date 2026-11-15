@@ -28,7 +28,7 @@ if ($hassiteconfig) {
     $settings = new admin_settingpage('local_unlistedcourses', new lang_string('pluginname', 'local_unlistedcourses'));
     $ADMIN->add('localplugins', $settings);
 
-    // Reached from the link below the default setting, so it stays out of the tree itself.
+    // Reached from the button below the default setting, so it stays out of the tree itself.
     $ADMIN->add('localplugins', new admin_externalpage(
         'local_unlistedcourses_applydefault',
         new lang_string('applydefault', 'local_unlistedcourses'),
@@ -52,14 +52,9 @@ if ($hassiteconfig) {
             $choices
         ));
 
-        $settings->add(new admin_setting_description(
+        $settings->add(new \local_unlistedcourses\local\admin\setting_applydefault(
             'local_unlistedcourses/applydefault',
-            new lang_string('applydefault', 'local_unlistedcourses'),
-            new lang_string(
-                'applydefault_desc',
-                'local_unlistedcourses',
-                (new moodle_url('/local/unlistedcourses/applydefault.php'))->out()
-            )
+            new lang_string('applydefault', 'local_unlistedcourses')
         ));
 
         $settings->add(new admin_setting_configselect(
