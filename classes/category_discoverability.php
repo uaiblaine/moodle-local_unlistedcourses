@@ -66,7 +66,9 @@ use local_unlistedcourses\local\state_lock;
  * checks the manage capability too, only so that nobody is shown a form their
  * save will refuse. Every real transition is gated, in both directions: unlike
  * the course side, where four writers already sit behind moodle/course:update,
- * this state has one writer and the gate costs nothing.
+ * this state has one writer and the gate costs nothing. One exception:
+ * unpublish_after_move() takes a public row back to listed with no capability asked, a
+ * restriction reachable only from {@see local\delete_move_guard}.
  *
  * A call that changes nothing needs no capability and fires no event.
  *
@@ -485,8 +487,10 @@ class category_discoverability {
      * local/unlistedcourses:publishcategory, is what lets this category be served anonymously:
      * it was public in its own row and inert before the deletion, and is effective after it. No
      * capability is asked because nothing is published here: the category goes from public to
-     * listed, a restriction, under the deleting user's moodle/category:manage. It cannot be used
-     * for any other transition.
+     * listed, a restriction. Core's delete_move() checks no capability itself (the check is
+     * can_move_content_to(), which the management page and the web service call before it): the
+     * callers of core's deletion have passed core's own check, and this method asks nothing. It
+     * cannot be used for any other transition.
      *
      * The row is read again under the category's lock, as {@see set_state()} reads it, and a
      * category that is no longer public there is left alone. The write is set_state()'s own, so

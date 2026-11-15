@@ -52,6 +52,9 @@ use local_unlistedcourses\local\state_lock;
  * here would only ever refuse a restoring teacher, and refuse them in the
  * un-hiding direction.
  *
+ * One exception: unpublish_after_move() takes a public row back to listed with no capability
+ * asked, a restriction reachable only from {@see local\delete_move_guard}.
+ *
  * A call that changes nothing needs no capability. That is what lets the
  * course form re-submit "public" from a frozen control when an editor who may
  * not publish saves an unrelated change: the save must never un-publish
@@ -547,8 +550,10 @@ class discoverability {
      * local/unlistedcourses:publish, is what lets this course be served anonymously: the course
      * was public in its own row and inert before the deletion, and is effective after it. No
      * capability is asked because nothing is published here: the course goes from public to
-     * listed, a restriction, under the deleting user's moodle/category:manage. It cannot be used
-     * for any other transition.
+     * listed, a restriction. Core's delete_move() checks no capability itself (the check is
+     * can_move_content_to(), which the management page and the web service call before it): the
+     * callers of core's deletion have passed core's own check, and this method asks nothing. It
+     * cannot be used for any other transition.
      *
      * The row is read again under the course's lock, as {@see set_state()} reads it, and a course
      * that is no longer public there is left alone. The write is set_state()'s own, so

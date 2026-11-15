@@ -288,15 +288,27 @@ core's own deletion is the audited act.
   only records, in two statements by `{course_categories}.path` and the public predicates, the
   course and category ids in the subtree whose own row is public and which are not public now; it
   writes nothing, because core can still abort. The `course_category_deleted` observer, after the
-  category's row is dropped and the caches are reset, asks `are_public()` again for those ids, and
+  category's row is dropped and the plugin's request caches are reset, asks `are_public()` again for those ids, and
   takes each one that is public now back to listed through `discoverability::unpublish_after_move()`
   / `category_discoverability::unpublish_after_move()`: `set_state()`'s own write under the state
   lock, firing `course_state_updated` / `category_state_updated` with the deleting user, and asking
-  no capability (a restriction, under that user's `moodle/category:manage`). Those two methods
+  no capability (a restriction; core's `delete_move()` checks none itself, its callers have passed
+  `can_move_content_to()`, and the guard asks nothing). Those two methods
   write nothing but public to listed. A row the move leaves inert and a row that was effective
   before the deletion are not touched. The record is per-request static state, from the callback to
   the event in the same request; an event without `contentmovedcategoryid` (`delete_full()`) drops
-  it unread.
+  it unread. Three limits, read against core's `delete_move()` (`course/classes/category.php`):
+  1. A row whose lock another writer still holds after the five-second wait
+     (`state_busy_exception`) is skipped: it stays public, and the guard reports it through
+     `debugging()` at `DEBUG_NORMAL`, naming the row and the deleted category.
+  2. On the management page (`course/management.php`) nothing wraps `delete_move()` in a
+     transaction: core moves the courses, then the cohorts, grades and content bank contents, and
+     only then deletes the category and fires the event. Between the move and the event a moved
+     public course is already served under its new path. Inside `core_course_delete_categories`
+     the whole call is one delegated transaction, so no other request sees that interval.
+  3. Core moves the subcategories (`change_parent_raw()`) before the courses. When `move_courses()`
+     returns false, `delete_move()` returns false without firing the event: the subcategories stay
+     under the new parent, the category survives, and nothing is settled.
 - **Other moves are not observed.** A move of a course or a category by a holder of
   `moodle/category:manage` outside a deletion (the management page's bulk move, a change of
   parent) follows its new path, and a public row that was inert can start to apply:
@@ -601,7 +613,7 @@ Two rules follow:
 
 | Method | Viewer | Memo key | Cost |
 |---|---|---|---|
-| `discoverability::get_states()` | none | course | 1 per request for unknown ids |
+| `discoverability::get_states()` | none | course | 1 per request for unknown ids (up to 20,000 ids; one more statement per chunk beyond it) |
 | `discoverability::state_sql()` | none | - | 0: a join in your statement |
 | `discoverability::are_public()` / `is_public()` | none | course | 4 + `unlisted_ids()` |
 | `category_discoverability::are_public()` / `is_public()` | none | category | 4 including `unlisted_ids()` |
@@ -611,7 +623,7 @@ Two rules follow:
 | `category_access::are_categories_discoverable()` / `filter_categories()` | `$USER` | viewer:category | at most 4 per request; 1 when nothing is unlisted |
 | `access::get_enrolment_state()` | `$USER` | viewer:course | 1 per course |
 | `access::get_next_action()` | `$USER` | viewer:course | statements per instance |
-| `access::get_next_actions()` | `$USER` | - | at most 4 per call; 0 for a visitor |
+| `access::get_next_actions()` | `$USER` | - | at most 4 per call, up to 20,000 ids (one more set of statements per chunk beyond it); 0 for a visitor |
 
 ---
 
@@ -1052,6 +1064,13 @@ not carry a `MOODLE_INTERNAL` guard.
 | `tests/category_access_test.php` | the three terms, AND over the path, the fast path |
 | `tests/discoverability_test.php`, `tests/category_discoverability_test.php` | the gates, the public composition and its budget, unknown stored values, `state_sql()` |
 | `tests/local/courseform_test.php` | the hook wiring, through `create_course()` and `update_course()` |
+| `tests/local/state_lock_test.php` | the core lock around a state write: taken and released, refused with `statebusy` when another writer holds it, the decision made on the row read under it |
+| `tests/local/delete_move_guard_test.php` | a category deleted with its contents moved publishes nothing: what is demoted, what is left alone, an aborted deletion, a row skipped on a busy lock |
+| `tests/local/id_chunks_test.php` | the reads of long id lists in chunks of 20,000, with 70,000 ids and real rows in the first and last chunk |
+| `tests/local/form/categorystate_test.php` | the markup of the category discoverability form, each assertion scoped to its element |
+| `tests/output/category_preview_test.php` | the "who sees this category" preview on the editing page |
+| `tests/reportbuilder/datasource/courses_test.php` | the courses data source, its public effect column held to `discoverability::are_public()` |
+| `tests/reportbuilder/datasource/categories_test.php` | the categories data source, its public effect column held to `category_discoverability::is_public()` |
 | `tests/backup_restore_test.php` | backup of every course, the restore gate, the restore default, restore into an existing course |
 | `tests/course_deletion_test.php` | the `course_deleted` observer on the asynchronous path (5.3 line only) |
 | `tests/privacy/provider_test.php` | the privacy provider |

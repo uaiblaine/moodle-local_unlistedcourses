@@ -25,35 +25,35 @@ with four courses (two listed, one public, one unlisted) and an unlisted "Leader
 restored courses is Unlisted. The pictures were taken on the 5.3 line; the plugin's own pages
 are the same on this 5.2 line.*
 
-![The course settings form of Negotiation for team leads: the Discoverability field, set to Unlisted, between Course visibility and Course start date](docs/screenshots/course-settings.png)
+![The course settings form of Negotiation for team leads: the Discoverability field, set to Unlisted, between Course visibility and Course start date](https://raw.githubusercontent.com/uaiblaine/moodle-local_unlistedcourses/MOODLE_502_STABLE/docs/screenshots/course-settings.png)
 
 The Discoverability field sits in the course form's General section, for whoever may change
 the course's visibility; Public is offered only to someone allowed to publish.
 
-![The category discoverability page of Leadership programme 2027: the Discoverability select set to Unlisted, and the preview naming the cohort defined at the category with its four members, the two role holders and the six people who still see the category](docs/screenshots/category-state.png)
+![The category discoverability page of Leadership programme 2027: the Discoverability select set to Unlisted, and the preview naming the cohort defined at the category with its four members, the two role holders and the six people who still see the category](https://raw.githubusercontent.com/uaiblaine/moodle-local_unlistedcourses/MOODLE_502_STABLE/docs/screenshots/category-state.png)
 
 A category's state is set on a page of its own in the category's navigation, with a preview of
 who still sees the category while it is unlisted.
 
-![The plugin's settings page: Default discoverability for new courses and Discoverability of a restored course whose backup has none, both set to Unlisted, with the link to apply the default to existing courses](docs/screenshots/settings.png)
+![The plugin's settings page: Default discoverability for new courses and Discoverability of a restored course whose backup has none, both set to Unlisted, with the link to apply the default to existing courses](https://raw.githubusercontent.com/uaiblaine/moodle-local_unlistedcourses/MOODLE_502_STABLE/docs/screenshots/settings.png)
 
 The two defaults, and the link to apply the default to the courses that predate it.
 
-![The Apply the default to existing courses page: a confirmation that two courses created before the date the default became Unlisted have no discoverability of their own and will become Unlisted in a background task](docs/screenshots/apply-default.png)
+![The Apply the default to existing courses page: a confirmation that two courses created before the date the default became Unlisted have no discoverability of their own and will become Unlisted in a background task](https://raw.githubusercontent.com/uaiblaine/moodle-local_unlistedcourses/MOODLE_502_STABLE/docs/screenshots/apply-default.png)
 
 Applying the default counts the courses it would reach and asks before it queues anything.
 
 <table>
 <tr>
-<td valign="top" width="50%"><img src="docs/screenshots/category-not-enrolled.png" alt="The Professional development category seen by a learner enrolled in one of its courses only: three courses, no Negotiation for team leads and no Leadership programme 2027 subcategory"></td>
-<td valign="top" width="50%"><img src="docs/screenshots/category-enrolled.png" alt="The same category seen by a learner enrolled in Negotiation for team leads and a member of the programme's cohort: the Leadership programme 2027 subcategory and four courses, Negotiation for team leads among them"></td>
+<td valign="top" width="50%"><img src="https://raw.githubusercontent.com/uaiblaine/moodle-local_unlistedcourses/MOODLE_502_STABLE/docs/screenshots/category-not-enrolled.png" alt="The Professional development category seen by a learner enrolled in one of its courses only: three courses, no Negotiation for team leads and no Leadership programme 2027 subcategory"></td>
+<td valign="top" width="50%"><img src="https://raw.githubusercontent.com/uaiblaine/moodle-local_unlistedcourses/MOODLE_502_STABLE/docs/screenshots/category-enrolled.png" alt="The same category seen by a learner enrolled in Negotiation for team leads and a member of the programme's cohort: the Leadership programme 2027 subcategory and four courses, Negotiation for team leads among them"></td>
 </tr>
 </table>
 
 The same category page for two learners: the unlisted course and the unlisted subcategory are
 named only to the one who is enrolled in the course and belongs to the programme's cohort.
 
-![The generic This content is not available page shown to the learner who is not enrolled when they open the unlisted course's address](docs/screenshots/direct-link-not-enrolled.png)
+![The generic This content is not available page shown to the learner who is not enrolled when they open the unlisted course's address](https://raw.githubusercontent.com/uaiblaine/moodle-local_unlistedcourses/MOODLE_502_STABLE/docs/screenshots/direct-link-not-enrolled.png)
 
 With the Dimensions theme, a learner who may not discover the unlisted course and opens its
 address gets the same "not available" page as a course that does not exist; without the theme
@@ -324,6 +324,14 @@ category). Public courses and categories that were already served before the del
 the move leaves held back, keep their state. Before the move the plugin only records which public
 states are held back; it acts after core has deleted the category, so a deletion core aborts
 changes no state.
+
+Three limits. A course or category whose state is still being changed by somebody else when the
+deletion finishes (the plugin waits five seconds) is skipped: it stays public, and the skip is
+written to the debugging output. On the management page there is a short interval between core
+moving the courses and the category being deleted during which a moved public course is already
+served; the web service does the whole deletion in one transaction, so it has no such interval.
+And when core fails while moving the courses, the subcategories have already moved under the new
+parent, the category survives, and no state is changed.
 
 This covers deletion with its contents moved only.
 

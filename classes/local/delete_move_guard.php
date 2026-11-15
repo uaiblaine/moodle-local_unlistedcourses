@@ -45,7 +45,7 @@ use local_unlistedcourses\discoverability;
  *    which public rows in the deleted category's subtree are inert now. It writes nothing, so a
  *    deletion that does not finish leaves every state as it was.
  * 2. {@see settle()}, from the course_category_deleted observer once the category is gone and
- *    the caches are reset, asks the same question of the recorded ids again. Each one that is
+ *    the plugin's request caches are reset, asks the same question of the recorded ids again. Each one that is
  *    public now was made public by the move, and goes back to listed through the state classes'
  *    own write, so the usual event fires; a row the move left inert, and a row that was
  *    effective before the deletion, is not touched.
@@ -112,14 +112,14 @@ final class delete_move_guard {
     /**
      * Take back to listed every recorded row the deletion of this category made effective.
      *
-     * Called after the category's own row is dropped and every request cache is reset, so the
+     * Called after the category's own row is dropped and the plugin's request caches are reset, so the
      * public predicates answer for the paths as they are now. Both answers are read before the
      * first write: no write here changes another recorded answer (an ancestor's public row is no
      * term of a descendant's), so the order of the writes does not matter.
      *
-     * A row whose lock another writer holds past the timeout is skipped: on a public row that
-     * writer is taking it out of the public state, which needs the publish capability, so it is
-     * being decided by somebody who may.
+     * A row whose lock another writer holds past the timeout is skipped: it stays public, and the
+     * skip is reported through debugging() with the row and the deleted category, so it is not lost
+     * without a trace. Nothing guarantees that the lock holder is taking it out of the public state.
      *
      * @param int $categoryid The deleted category.
      * @param bool $moved Whether core moved its contents; a deletion without a move settles nothing.
@@ -139,14 +139,22 @@ final class delete_move_guard {
             try {
                 discoverability::unpublish_after_move($courseid, $userid);
             } catch (state_busy_exception) {
-                continue;
+                debugging(
+                    "local_unlistedcourses: course {$courseid} was skipped after category {$categoryid} was deleted with its "
+                        . 'contents moved, because another writer held its lock; it kept its public state.',
+                    DEBUG_NORMAL
+                );
             }
         }
         foreach ($categories as $id) {
             try {
                 category_discoverability::unpublish_after_move($id, $userid);
             } catch (state_busy_exception) {
-                continue;
+                debugging(
+                    "local_unlistedcourses: category {$id} was skipped after category {$categoryid} was deleted with its "
+                        . 'contents moved, because another writer held its lock; it kept its public state.',
+                    DEBUG_NORMAL
+                );
             }
         }
     }
