@@ -300,7 +300,11 @@ core's own deletion is the audited act.
 - **Other moves are not observed.** A move of a course or a category by a holder of
   `moodle/category:manage` outside a deletion (the management page's bulk move, a change of
   parent) follows its new path, and a public row that was inert can start to apply:
-  `managecategorystate` guards the state row, not the tree.
+  `managecategorystate` guards the state row, not the tree. Core's move events carry no previous
+  category, so telling a row the move made effective from one that was effective before would
+  need the path recorded on each public row; the owner chose to document it instead (README,
+  "Moving a course or a category publishes what was held back", and the help of the category
+  discoverability control).
 
 ### 1.7 Privacy
 
