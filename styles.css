@@ -1,0 +1,9 @@
+/* The rows of the settings page are siblings in one fieldset; a hairline and padding set them apart. */
+#page-admin-setting-local_unlistedcourses .form-item.row {
+    padding-top: 1rem;
+    padding-bottom: 1rem;
+}
+
+#page-admin-setting-local_unlistedcourses .form-item.row + .form-item.row {
+    border-top: 1px solid var(--bs-border-color, #dee2e6);
+}
