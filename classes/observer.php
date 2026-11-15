@@ -63,7 +63,7 @@ class observer {
      *
      * Then, for a delete_move(), what the move made public goes back to listed: the public rows
      * below the category that local_unlistedcourses_pre_course_category_delete_move() recorded
-     * as inert, asked again now that the category's own row is gone and the caches are reset
+     * as inert, asked again now that the category's own row is gone and the plugin's request caches are reset
      * ({@see local\delete_move_guard}). This is the first moment the deletion is certain, which
      * is why the callback only reads.
      *
