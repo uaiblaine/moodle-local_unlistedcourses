@@ -108,8 +108,19 @@ final class applydefault_page_test extends \advanced_testcase {
         $root = admin_get_root(true, true);
         $this->assertTrue($root->locate('local_unlistedcourses_applydefault')->is_hidden());
         $settings = $root->locate('local_unlistedcourses');
-        $link = $settings->settings->local_unlistedcoursesapplydefault ?? null;
-        $this->assertInstanceOf(\admin_setting_description::class, $link);
-        $this->assertStringContainsString('/local/unlistedcourses/applydefault.php', (string) $link->description);
+        $item = $settings->settings->local_unlistedcoursesapplydefault ?? null;
+        $this->assertInstanceOf(\local_unlistedcourses\local\admin\setting_applydefault::class, $item);
+
+        $html = $item->output_html($item->get_setting());
+        $this->assertSame(1, preg_match(
+            '~<a\s[^>]*class="[^"]*\bbtn\b[^"]*"[^>]*href="[^"]*/local/unlistedcourses/applydefault\.php"~',
+            $html
+        ), 'The button does not lead to the action page.');
+        foreach (['applydefault_reach', 'applydefault_next', 'applydefault_action', 'applydefault_savefirst'] as $id) {
+            $this->assertStringContainsString(s(get_string($id, 'local_unlistedcourses')), $html);
+        }
+        // The title and the paragraphs find the item in the admin search.
+        $this->assertTrue($item->is_related('apply the default'));
+        $this->assertTrue($item->is_related('asks for confirmation'));
     }
 }

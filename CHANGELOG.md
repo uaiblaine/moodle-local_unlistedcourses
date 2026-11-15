@@ -6,7 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-Version `2026100511`: report builder data sources; no database changes.
+Versions `2026100511` and `2026100512`: report builder data sources and the settings page's apply
+button; no database changes.
 
 ### Added
 
@@ -74,6 +75,10 @@ no database changes.
 
 ### Changed
 
+- On the settings page, "Apply the default to existing courses" is a button to the confirmation
+  page, under two short paragraphs that say what the default does not reach and what the next page
+  shows, with a note to save first; it was a link inside a paragraph. The rows of the page are
+  padded and separated by a hairline (a new `styles.css`, scoped to the page's body id).
 - The help of the category discoverability control says that a public course held back by the
   category is taken back to listed, not made public again, when the category is deleted with its
   contents moved.
