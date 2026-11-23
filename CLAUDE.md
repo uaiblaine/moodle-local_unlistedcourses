@@ -228,7 +228,14 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   `course/edit.php` means on a stack whose mounted code is newer than its site.
 - **Never cache the answer across requests.** `tool_dynamic_cohorts` writes
   `cohort_members` in bulk without firing `cohort_member_added`/`removed`. Request scope
-  only.
+  only. The rule is about a viewer's answer, which depends on cohort membership. The PUBLIC
+  answer (`discoverability::are_public()`, `category_discoverability::public_ids()`) has no
+  viewer and no cohort term: the owner allowed a consumer to cache it (2026-11-21, theme_dimensions'
+  public calendar, `local\calendar\publiccache`), invalidated by this plugin's
+  `course_state_updated` and `category_state_updated` and core's course and category events.
+  So every write that changes a public answer must keep firing one of those events: a state
+  written without its event (a direct insert, a bulk path) leaves a public cache stale until
+  its rotation.
 - The `access` predicate gotchas that predate the state table — `can_self_enrol()` is not
   generic, `=== true` never `!== false`, the applicant cap lives outside `allow_apply()`, a
   pending application is not an enrolment, staff must never lose a course,
