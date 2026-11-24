@@ -103,14 +103,18 @@ Two more answers about the current user and a course, for the theme and blocks t
   date that has passed) or `none` (no row, a row on a disabled instance, or one that ends before it
   starts). When several rows exist the best wins, in that order.
 - `get_next_action(int $courseid)`: what they may do now to join, whatever the relationship -
-  `open` with its routes (`self`, `apply`, `fee`, `paypal`, `autoenrol`), `guest` (`free`, or
-  behind a `key`), `conditional` (an `enrol_coursecompleted` instance, for a viewer enrolled in its
-  prerequisite), `blocked` with the most useful reason (`window`, `full`, `cohort`, `own_row`,
+  `open` with its routes (`self`, `apply`, `fee`, `paypal`, `autoenrol`, `conditional`, each named
+  after its enrol plugin, so `conditional` is `enrol_conditional`), `guest` (`free`, or behind a
+  `key`), `conditional` (an `enrol_coursecompleted` instance, for a viewer enrolled in its
+  prerequisite; only the spelling is shared with the route), `blocked` with the most useful reason (`window`, `full`, `cohort`, `own_row`,
   `off`), or `none`. Every value is a public constant of `access`. It asks each method its own
   question, with statements per instance. `get_next_actions(array $courseids)` answers a page of
   courses in at most four statements, whatever the page holds: it drops the two checks SQL cannot
   read (the self enrolment capability and `enrol_autoenrol`'s rule), so it may answer open where
   the per-course form answers blocked, never the reverse, and it never decides discoverability.
+  For `enrol_conditional` it drops nothing: it asks the capability and evaluates the condition
+  tree of each instance through the same rule as the per-course form, and so pays whatever those
+  conditions read, per instance.
   Both answer `opens` when the course is `blocked` only because a route's enrolment window has not
   opened yet: the earliest such start date, a timestamp, or null. A surface that says when
   enrolment opens prints this date and never works one out; the batch may leave it null where
@@ -127,8 +131,11 @@ Somebody may discover an unlisted course when any of these holds:
   `enrol_self::can_self_enrol()`; for an `enrol_apply` build that provides `allow_apply()`, that
   method plus the applicant cap that lives outside it, on an instance where they hold no row yet; for
   `enrol_fee` and `enrol_paypal`, the enrolment window open, a price, and no row of theirs on the
-  instance; any enabled guest instance, with or without a key; and `enrol_autoenrol`'s own
-  `enrol_allowed()`;
+  instance; any enabled guest instance, with or without a key; `enrol_autoenrol`'s own
+  `enrol_allowed()`; and, for an `enrol_conditional` build that provides `evaluate_conditions()`,
+  a copy of that plugin's `can_self_enrol()` (window, new enrolments, no row of theirs on the
+  instance, places, `enrol/conditional:enrolself`) with its condition tree evaluated by the
+  plugin itself and met - a tree the engine cannot judge refuses;
 - they will be enrolled by `enrol_coursecompleted` once they complete another course (their next
   action is conditional): an instance inside its enrolment window on which they hold no row, for a
   viewer actively enrolled in the prerequisite course the instance names;
@@ -140,7 +147,8 @@ discoverable to that user through any route the next action still offers them.
 
 There is no cohort setting of this plugin's own: restricting who may join an unlisted course
 is the enrolment method's job, through `enrol.customint5`, the "only cohort members" field
-`enrol_self` and `enrol_apply` already carry.
+`enrol_self` and `enrol_apply` already carry, or through a cohort condition in an
+`enrol_conditional` tree.
 
 ## Categories
 
