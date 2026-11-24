@@ -30,9 +30,9 @@ use PHPUnit\Framework\Attributes\DataProvider;
 /**
  * Tests for the relationships, the discoverability allow-list, the next action and its batch.
  *
- * The shapes that need enrol_apply, enrol_autoenrol or enrol_coursecompleted are built only where
- * those plugins are installed, so on a runner without them the tests still run, over the core
- * shapes alone.
+ * The shapes that need enrol_apply, enrol_autoenrol, enrol_coursecompleted or enrol_conditional are
+ * built only where those plugins are installed, so on a runner without them the tests still run,
+ * over the core shapes alone.
  *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine
@@ -796,6 +796,51 @@ final class next_action_test extends \advanced_testcase {
             $make('guest beats course completed', $guestfirst, function ($c) use ($prerequisite) {
                 $this->enable_default($c, 'guest');
                 $this->add_instance($c, 'coursecompleted', ['customint1' => $prerequisite->id]);
+            });
+        }
+        if (is_callable([enrol_get_plugin('conditional'), 'evaluate_conditions'])) {
+            // The engine's userlist condition: met by the viewer, or by somebody else only.
+            $tree = fn(string $username): string => json_encode(['op' => 'and', 'children' => [
+                ['type' => 'userlist', 'config' => ['usernames' => [$username]]],
+            ]]);
+            $meets = ['customint6' => 1, 'customtext2' => $tree(\core_text::strtolower($viewer->username))];
+            $fails = ['customint6' => 1, 'customtext2' => $tree(\core_text::strtolower($other->username))];
+            // The batch evaluates the conditions and asks the capability, so it never differs here.
+            $make('conditional met', $open(['conditional']), function ($c) use ($meets) {
+                $this->add_instance($c, 'conditional', $meets);
+            });
+            $make('conditional not met', $blocked(access::BLOCKED_OFF), function ($c) use ($fails) {
+                $this->add_instance($c, 'conditional', $fails);
+            });
+            $make('conditional new enrolments off', $blocked(access::BLOCKED_OFF), function ($c) use ($meets) {
+                $this->add_instance($c, 'conditional', ['customint6' => 0] + $meets);
+            });
+            $make('conditional window closed', $blocked(access::BLOCKED_WINDOW), function ($c) use ($meets, $now) {
+                $this->add_instance($c, 'conditional', ['enrolenddate' => $now - DAYSECS] + $meets);
+            });
+            $make('conditional window not open yet', $window, function ($c) use ($meets, $tomorrow) {
+                $this->add_instance($c, 'conditional', ['enrolstartdate' => $tomorrow] + $meets);
+            }, null, $tomorrow);
+            $make('conditional window not open yet, not met', $window, function ($c) use ($fails, $tomorrow) {
+                $this->add_instance($c, 'conditional', ['enrolstartdate' => $tomorrow] + $fails);
+            });
+            $make('conditional full', $blocked(access::BLOCKED_FULL), function ($c) use ($meets, $other) {
+                $instance = $this->add_instance($c, 'conditional', ['customint3' => 1] + $meets);
+                $this->add_row((int) $instance->id, (int) $other->id, ENROL_USER_ACTIVE);
+            });
+            $make('conditional own row', $blocked(access::BLOCKED_OWN_ROW), function ($c) use ($meets, $viewer) {
+                $instance = $this->add_instance($c, 'conditional', $meets);
+                $this->add_row((int) $instance->id, (int) $viewer->id, ENROL_USER_SUSPENDED);
+            });
+            $make('conditional capability prohibited', $blocked(access::BLOCKED_OFF), function ($c) use ($DB, $meets) {
+                $this->add_instance($c, 'conditional', $meets);
+                $userrole = (int) $DB->get_field('role', 'id', ['shortname' => 'user']);
+                $context = \core\context\course::instance($c->id)->id;
+                assign_capability('enrol/conditional:enrolself', CAP_PROHIBIT, $userrole, $context, true);
+            });
+            // A cohort restriction means nothing to this method: customint5 is never read for it.
+            $make('conditional ignores customint5', $open(['conditional']), function ($c) use ($meets, $foreign) {
+                $this->add_instance($c, 'conditional', ['customint5' => $foreign->id] + $meets);
             });
         }
         set_config('cost', 0, 'enrol_fee');

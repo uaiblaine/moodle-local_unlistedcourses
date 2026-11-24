@@ -117,6 +117,18 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   parity test over every check and by a fingerprint of both methods' source: when that reddens
   on a core update, bring the copy in step before touching the fingerprint, because a check the
   copy lacks would name an unlisted course to somebody enrol_self refuses.
+- **`conditional_outcome()` is the same kind of copy, for `enrol_conditional`**, and the one rule
+  every door asks about that method: the per-course path (unprimed, or primed by `prime_probe()`,
+  which reads its own row and count in statements 2 and 4), the batch, and through them `opens`.
+  It copies `can_self_enrol($instance, false)` (on the fleet branch, the protected
+  `get_self_enrol_status()` and `get_instance_status()` behind it) and has the plugin's
+  `evaluate_conditions()` judge the tree, admitting only `null` or a strictly true `is_met()`:
+  unknown refuses. The batch evaluates, it does not drop, so `batch_vouches()` has no case for it.
+  `access_conditional_test` holds it to the plugin on all three paths and fingerprints the four
+  methods; when that reddens, bring the copy in step first. Never read `customint5` for this
+  method (its cohort is a condition), and never name a class of `enrol_conditional` or
+  `local_enrolconditions` (optional plugins: `is_callable()` on the plugin object). The route's
+  kind `conditional` is the plugin name and has nothing to do with `NEXT_CONDITIONAL`.
 - **The capability check lives in `discoverability::set_state()` and nowhere else.** The
   course form is one of four writers — the web service and `tool_uploadcourse` dispatch the
   same `after_form_submission` hook (`create_course()` dispatches it after the course row is
@@ -228,7 +240,14 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   `course/edit.php` means on a stack whose mounted code is newer than its site.
 - **Never cache the answer across requests.** `tool_dynamic_cohorts` writes
   `cohort_members` in bulk without firing `cohort_member_added`/`removed`. Request scope
-  only.
+  only. The rule is about a viewer's answer, which depends on cohort membership. The PUBLIC
+  answer (`discoverability::are_public()`, `category_discoverability::public_ids()`) has no
+  viewer and no cohort term: the owner allowed a consumer to cache it (2026-11-21, theme_dimensions'
+  public calendar, `local\calendar\publiccache`), invalidated by this plugin's
+  `course_state_updated` and `category_state_updated` and core's course and category events.
+  So every write that changes a public answer must keep firing one of those events: a state
+  written without its event (a direct insert, a bulk path) leaves a public cache stale until
+  its rotation.
 - The `access` predicate gotchas that predate the state table — `can_self_enrol()` is not
   generic, `=== true` never `!== false`, the applicant cap lives outside `allow_apply()`, a
   pending application is not an enrolment, staff must never lose a course,
@@ -278,11 +297,16 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
 - **`enrol_apply` is absent from a fresh test site's `enrol_plugins_enabled`** —
   `add_apply_enrol()` in `access_test` enables it first.
 - **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds a hundred and
-  seventy-four guards, and each must redden a test. The apply, autoenrol and coursecompleted gates need a
-  stack that mounts those plugins: m503 and m503b mount all three (enrol_apply, autoenrol and
-  coursecompleted). `mdl ci`, and so
-  `mdl mutate --fast`, installs none of them, skips their tests and reads those gates as held
-  by nothing. Adding a
+  ninety-three guards, and each must redden a test. The apply, autoenrol and coursecompleted gates
+  need a stack that mounts those plugins: m503 and m503b mount all three. `mdl ci`, and so
+  `mdl mutate --fast`, installs none of them, skips their tests and reads those gates as held by
+  nothing. The conditional gates are held by the local gate too: `.mdl-ci.yml` (export-ignored,
+  never read by GitHub, whose CI skips those tests) names the `moodle-enrol_conditional` checkout
+  as a local-only extra on the 5.3 legs, its HEAD containing `fleet/audit-2026-11-23`, the line
+  the fingerprints were taken from; its engine local_enrolconditions arrives through its
+  dependencies. So `mdl ci` and `--fast` run `access_conditional_test` on both database families,
+  and a leg that reports those tests skipped did not install the method. A fresh test site does
+  not enable it: `\core\plugininfo\enrol::enable_plugin('conditional', true)`. Adding a
   guard without a mutation is how untested ones get in. The first sweep found one that reddened nothing — the restore clamp above —
   and it turned out to be wrong code, not a missing test.
 - **Restore into an EXISTING course is a different path from restore into a new one**, and

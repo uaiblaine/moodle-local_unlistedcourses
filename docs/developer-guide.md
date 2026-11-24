@@ -410,13 +410,16 @@ rule runs, `prime_probe()` reads what it would read course by course, for all of
 most four statements: the course contexts with every enabled instance (the rows of
 `enrol_get_instances($courseid, true)`, in its order and with its filter), every row the viewer
 holds, the viewer's cohorts (only when a self enrolment instance restricts by one) and one grouped
-count of the rows on every capped self enrolment instance. Staff skip the last three, and a course
-the enrolment state keeps skips the last two. The rule then decides every course from those memos,
+count of the rows on every capped self enrolment or `enrol_conditional` instance. Staff skip the
+last three, and a course the enrolment state keeps skips the last two. The rule then decides every course from those memos,
 in the same order and by the same terms; enrol_self's `can_self_enrol($instance, false)` is answered
 by `self_enrol_admits()`, a check-for-check copy of it and `is_self_enrol_available()` over the same
 facts, held to the core methods by a parity test over every check and a fingerprint of their source
-(`tests/access_probe_test.php`). The other enrol methods are still asked per instance, as their own
-rules read; a listing whose unlisted courses use them pays those plugins' statements.
+(`tests/access_probe_test.php`). An `enrol_conditional` instance is decided the same way by
+`conditional_outcome()` (section 2.6.1): its own row and its count come from those statements, and
+only its condition tree is still evaluated per instance, at whatever its conditions read. The other
+enrol methods are still asked per instance, as their own rules read; a listing whose unlisted
+courses use them pays those plugins' statements.
 
 A caller that has already read the viewer's whole `{user_enrolments}` in one statement knows the
 answer for those courses. `prime_relationships()` hands it over: it writes **true** into the
@@ -529,7 +532,7 @@ scheduled, has applied or is suspended may still be offered another route in. Th
 ```php
 [
     'type'        => NEXT_OPEN | NEXT_GUEST | NEXT_CONDITIONAL | NEXT_BLOCKED | NEXT_NONE,
-    'routes'      => [['kind' => 'self'|'apply'|'fee'|'paypal'|'autoenrol', 'instanceid' => int], ...],
+    'routes'      => [['kind' => 'self'|'apply'|'fee'|'paypal'|'autoenrol'|'conditional', 'instanceid' => int], ...],
     'guest'       => GUEST_FREE | GUEST_KEY | null,
     'conditional' => ['prerequisiteid' => int, 'instanceid' => int] | null,
     'blocked'     => BLOCKED_* | null,
@@ -545,6 +548,10 @@ scheduled, has applied or is suspended may still be offered another route in. Th
 | `blocked` | Nothing on offer, but a method that exists for the viewer refuses them now; `blocked` carries the most useful reason. |
 | `none` | Nothing on offer. A visitor, the guest account, a missing course and the site course answer `none` without asking any plugin. |
 
+A route's `kind` is the enrol plugin's name, so `enrol_conditional`'s route reads `conditional`: it
+shares only its spelling with the `conditional` type and key, which stay `enrol_coursecompleted`'s
+promise.
+
 `guest` and `conditional` are filled whenever such an offer exists, whatever the summary; `blocked`
 and `opens` only when the summary is `blocked`. When several methods refuse, the reason is the most
 useful one by `BLOCKED_PRIORITY`: `window` > `full` > `cohort` > `own_row` > `off`.
@@ -555,7 +562,7 @@ useful one by `BLOCKED_PRIORITY`: `window` > `full` > `cohort` > `own_row` > `of
 | `BLOCKED_FULL` | `full` | No place left. |
 | `BLOCKED_COHORT` | `cohort` | Restricted to a cohort the viewer is not in. |
 | `BLOCKED_OWN_ROW` | `own_row` | The viewer's own enrolment stands in the way: a row on that instance, or one in the course. |
-| `BLOCKED_OFF` | `off` | No new enrolments, no price, or a refusal the instance fields do not explain (the self enrolment capability, an autoenrol rule). |
+| `BLOCKED_OFF` | `off` | No new enrolments, no price, or a refusal the instance fields do not explain (the self enrolment capability, an autoenrol rule, `enrol_conditional`'s capability or condition tree). |
 
 #### 2.6.1 What each enrolment method is asked
 
@@ -570,19 +577,34 @@ cohort sync, meta link, ...) offer a learner nothing to act on and are ignored.
 | `enrol_guest` | `guest` | any enabled instance; a key, when set, is asked for on entry | - |
 | `enrol_autoenrol` | route `autoenrol` | the plugin's own `enrol_allowed()`; only for a build that provides it | `own_row` (a row on the instance, or any row in the course when the instance does not enrol people already enrolled), `off`, `window`, `full`; a refusal by its rule reads `off` |
 | `enrol_coursecompleted` | `conditional` | only for a viewer **actively enrolled in the prerequisite** course the instance names; anybody else is offered nothing by it, not even a refusal, because naming the course to them would defeat the unlisting | `own_row`, `window` |
+| `enrol_conditional` | route `conditional` | `conditional_outcome()`, a check-for-check copy of the plugin's `can_self_enrol($instance, false)` (instance enabled, window, new enrolments, own row in any status, places limit, `enrol/conditional:enrolself`) with the condition tree evaluated by the plugin's own `evaluate_conditions()`; admitted only when that answers `null` (no conditions) or a result whose `is_met()` is strictly true, so an **unknown** result (invalid tree, uninstalled or disabled condition type, a condition that threw) refuses; there is no cohort check (`customint5` is never read: the cohort is a condition); only for a build that provides `evaluate_conditions()` | `window`, `off` (new enrolments off), `own_row`, `full`; the capability and the conditions both read `off`, on purpose |
 
-The methods outside core are optional: `allow_apply()` and `enrol_allowed()` are called through the
-plugin object behind `is_callable()`, never by naming a class of theirs.
+The methods outside core are optional: `allow_apply()`, `enrol_allowed()` and
+`evaluate_conditions()` are called through the plugin object behind `is_callable()`, never by
+naming a class of theirs (nor of `local_enrolconditions`, `enrol_conditional`'s engine). A build
+without the method offers nothing.
+
+`enrol_conditional` is the second method decided by a copy rather than by calling the plugin,
+because its `can_self_enrol()` renders the reasons of a refusal through `$OUTPUT` and reads its own
+row and count per instance, which a listing must not pay per course. Every door - the per-course
+answer, unprimed or primed by a listing, and the batch, and through them `opens` - calls the one
+rule; `tests/access_conditional_test.php` holds it to the plugin on all three paths and by a
+fingerprint of the plugin's four methods (`can_self_enrol()`, `get_self_enrol_status()`,
+`is_self_enrol_available()`, `get_instance_status()`). After enrolment the engine may suspend a
+row, remove it or only log: a row it suspended is `suspended` (section 2.5) and keeps no unlisted
+course, and it bars the viewer from the instance as their own row (`own_row`).
 
 #### 2.6.2 The `opens` contract
 
 `opens` says when a refused route would take the viewer: the earliest enrolment start date still
 ahead among the instances whose **only** refusal is that their window has not opened yet. Each
 such instance is asked again by the same rule with its start date cleared, and counts when it then
-offers a route (`self`, `apply`, `fee`, `paypal`, `autoenrol`). An instance that would still refuse
-(full, cohort, own row, new enrolments off, the self enrolment capability, an autoenrol rule) gives
-no date; neither does a window that has closed, one that ends before it starts, nor
-`enrol_coursecompleted`, which offers no route.
+offers a route (`self`, `apply`, `fee`, `paypal`, `autoenrol`, `conditional`). An instance that
+would still refuse (full, cohort, own row, new enrolments off, the self enrolment capability, an
+autoenrol rule, an `enrol_conditional` tree the viewer does not meet now) gives no date; neither
+does a window that has closed, one that ends before it starts, nor `enrol_coursecompleted`, which
+offers no route. A `date` condition inside an `enrol_conditional` tree gives no date either: the
+engine has no API that says when a tree will be met, so only the instance's own window is dated.
 
 `blocked` stays the most useful reason across the instances, so it reads `window` unless another
 instance's refusal outranks it. **A surface that shows when enrolment opens reads `opens`, never
@@ -594,8 +616,8 @@ in the way.
 
 | | `get_next_action()` | `get_next_actions()` |
 |---|---|---|
-| Asks | each enrol plugin, per instance | the same rules, read from at most four bulk statements: the enabled instances (with course contexts preloaded), every row the viewer holds, the viewer's cohorts (only when an instance restricts by one), one grouped count per capped instance (only when one is capped) |
-| Drops | nothing | `enrol/self:enrolself` and the autoenrol rule, which SQL cannot read |
+| Asks | each enrol plugin, per instance | the same rules, read from at most four bulk statements: the enabled instances (whole rows, with course contexts preloaded), every row the viewer holds, the viewer's cohorts (only when an instance restricts by one), one grouped count per capped instance (only when one is capped); plus, per `enrol_conditional` instance that passes every other check, whatever its conditions read (the engine has no bulk API) |
+| Drops | nothing | `enrol/self:enrolself` and the autoenrol rule, which SQL cannot read; nothing of `enrol_conditional`, whose capability and conditions it asks through the same rule as the per-course form, so the two answer alike for that method |
 | May differ | - | may answer `open` where the per-course form answers `blocked`, **never the reverse** |
 | `opens` | as above | checks the self enrolment capability before dating and never dates an autoenrol instance with a rule, so it may answer `null` where the per-course form dates, **never the reverse** |
 | Input | one course | a **page** of courses: up to 20,000 ids go into one `IN` list; a longer list stays correct and pays statements 1 and 4 once per 20,000 |
@@ -876,9 +898,9 @@ dependency on this plugin (`$plugin->dependencies`). It consumes `access`, `disc
 | Listings | `theme_dimensions\output\core\course_renderer` (extends Boost Union's) | `access::filter_courses()` in `coursecat_courses()` (the net), and in `coursecat_category_content()`, `search_courses()`, `frontpage_available_courses()` and `tagged_courses()`, which fetch, filter and only then paginate; `category_access::filter_categories()` / `is_category_discoverable()` in `coursecat_category()`, `coursecat_tree()`, `coursecat_subcategories()`, `coursecat_category_content()` (the AJAX expander enters there with an id from the request), `course_category()`, `course_category_name()` and `coursecat_coursebox_content()` (Boost Union's card badge names the category through its own helper). |
 | Ghosting by link | `local\hook\after_config`, `local\landing\redirector` | `is_ghosted()` over `access::is_course_discoverable()` for `enrol/index.php` and `course/info.php`; `is_category_ghosted()` over `category_access::is_category_discoverable()` for `course/index.php?categoryid=N`. Visitors are not ghosted; both fail open when the plugin is missing. |
 | Course landing page | `landing.php`, `local\landing\request` | No `require_login()`. `request::handle()` refuses a visitor unless `local\landing\publicaccess::is_public()` (a fail-closed adapter over `discoverability::is_public()`), then ghosts a logged-in user through `redirector::is_ghosted()`, then mirrors the guards of `enrol/index.php`, skipping the category capability check for a visitor. |
-| What the landing page offers | `local\landing\resolver`, `output\landing_page` | `access::get_enrolment_state()` and `get_next_action()` for the viewer's relationship and the route to offer. |
+| What the landing page offers | `local\landing\resolver`, `output\landing_page` | `access::get_enrolment_state()` and `get_next_action()` for the viewer's relationship and the route to offer. The resolver keeps its own per-method rules and does not know the `conditional` route (`enrol_conditional`) yet. |
 | Anonymous files | `theme_dimensions_pluginfile()`, `local\landing\publicfiles` | `resolve()` re-checks `publicaccess::is_public()` per request; `viewer_may_see_many()` uses `access::are_courses_discoverable()` for a logged-in reader's cards. |
-| Category showcase | `local\category\population`, `guard`, `cards`, `classifier`, `enrichment` | Core visibility first, then `category_access::filter_categories()` and `access::filter_courses()`; `access::prime_relationships()` from the viewer's enrolment rows, read in one statement; `discoverability::state_sql()` to read each course's state inside the subtree statement (`= STATE_PUBLIC` for the anonymous shell); `filter_courses_public()` and `category_discoverability::are_public()` for the anonymous page; `classify_enrolment()`, `get_enrolment_state()` and `get_next_actions()` for the cards and their opening dates. Unrelated unlisted courses are probed per course up to a cap and the rest withheld (fail closed). |
+| Category showcase | `local\category\population`, `guard`, `cards`, `classifier`, `enrichment` | Core visibility first, then `category_access::filter_categories()` and `access::filter_courses()`; `access::prime_relationships()` from the viewer's enrolment rows, read in one statement; `discoverability::state_sql()` to read each course's state inside the subtree statement (`= STATE_PUBLIC` for the anonymous shell); `filter_courses_public()` and `category_discoverability::are_public()` for the anonymous page; `classify_enrolment()`, `get_enrolment_state()` and `get_next_actions()` for the cards and their opening dates. Unrelated unlisted courses are probed per course up to a cap and the rest withheld (fail closed). Its `classifier` keeps its own per-method rules and does not know the `conditional` route (`enrol_conditional`) yet. |
 | Anonymous category page | `local\category\publicaccess` | A fail-closed adapter over `category_discoverability::is_public()`, with the theme's own on/off switches folded in, asked by the page, the forward from `course/index.php`, the image route and the Open Graph tags. |
 | Tests | `tests/behat/behat_theme_dimensions.php` | A step `the course "X" is "listed\|unlisted\|public" for discoverability` writing through `discoverability::set_state()` as the site administrator. |
 
@@ -893,6 +915,8 @@ enrolment row means:
   against the `RELATIONSHIP_*` constants in `explore`, `cards`, `inventory` and `attention`.
 - Its `relationship::SHOWN` order mirrors this plugin's rank, and its `relationship_test` holds that
   order against `get_enrolment_state()` over the same rows.
+- Its `catalogue::ROUTE_METHODS` keeps its own list of enrolment methods and does not know the
+  `conditional` route (`enrol_conditional`) yet.
 
 ### local_dimensions
 
@@ -1008,8 +1032,10 @@ There is no `is_course_discoverable($courseid, $userid)`. See section 2.1.
   a large one spread over many categories, as this plugin's budget tests do.
 - **`enrol_apply` is absent from a fresh test site's `enrol_plugins_enabled`**: enable it before
   creating an instance, or `enrol_get_instances($id, true)` filters the instance out and the predicate
-  answers "cannot enrol" for an unrelated reason. Tests that need `enrol_apply`,
-  `enrol_autoenrol` or `enrol_coursecompleted` should skip when the plugin or its method is missing.
+  answers "cannot enrol" for an unrelated reason. The same holds for `enrol_conditional`
+  (`\core\plugininfo\enrol::enable_plugin('conditional', true)`). Tests that need `enrol_apply`,
+  `enrol_autoenrol`, `enrol_coursecompleted` or `enrol_conditional` should skip when the plugin or
+  its method is missing.
 - **Asynchronous course deletion** (Moodle 5.3): enable `moodlecourse/enablecourseasyncdeletion`,
   call `delete_course($id, false)`, and run the adhoc tasks. Until then the course exists, hidden,
   with its state row; afterwards the row is gone. `tests/course_deletion_test.php` (on the 5.3 line only: 5.2 has no
