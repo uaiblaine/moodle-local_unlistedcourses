@@ -5,12 +5,13 @@
 # skip wherever the method is absent. Installing it here lets the local gate and
 # `mdl mutate --fast` run them on every 5.3 leg and on both database families.
 #
-# The checkout must contain the fleet's audited line of the fork: the fingerprint test pins
-# the source of the four methods the rule copies as that line has them, and upstream's `main`
-# spells them differently. Its engine, local_enrolconditions, arrives through the method's own
-# $plugin->dependencies.
+# The checkout must contain the fork's audited line: the fingerprint test pins the source of the
+# four methods the rule copies as that line has them, and upstream's `main` spells them
+# differently. `ref` names the commit those fingerprints were taken at, which the fork's own
+# `main` contains, rather than a branch name a clean-up could delete. Its engine,
+# local_enrolconditions, arrives through the method's own $plugin->dependencies.
 extra-plugins:
   - repo: moodle-enrol_conditional
     path: enrol/conditional
     branches: [MOODLE_503_STABLE]
-    ref: fleet/audit-2026-11-23
+    ref: 593b83cca6d132e20c9547ea6f3c44a162b3d004
