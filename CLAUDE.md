@@ -302,8 +302,8 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   `mdl mutate --fast`, installs none of them, skips their tests and reads those gates as held by
   nothing. The conditional gates are held by the local gate too: `.mdl-ci.yml` (export-ignored,
   never read by GitHub, whose CI skips those tests) names the `moodle-enrol_conditional` checkout
-  as a local-only extra on the 5.3 legs, its HEAD containing `fleet/audit-2026-11-23`, the line
-  the fingerprints were taken from; its engine local_enrolconditions arrives through its
+  as a local-only extra on the 5.3 legs, its HEAD containing the commit the fingerprints were
+  taken at (`593b83c`, in the fork's `main`); its engine local_enrolconditions arrives through its
   dependencies. So `mdl ci` and `--fast` run `access_conditional_test` on both database families,
   and a leg that reports those tests skipped did not install the method. A fresh test site does
   not enable it: `\core\plugininfo\enrol::enable_plugin('conditional', true)`. Adding a
