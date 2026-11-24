@@ -60,6 +60,13 @@ use local_unlistedcourses\local\id_chunks;
  * reimplementation for another user would fail open as soon as it drifted from
  * the plugin. Tests switch users with setUser() instead.
  *
+ * Two methods are decided by a copy of the plugin's own check rather than by
+ * calling it, because the plugin renders its refusals or reads per instance what
+ * a listing reads in bulk: enrol_self ({@see self_enrol_admits()}) and
+ * enrol_conditional ({@see conditional_outcome()}, whose condition tree is still
+ * evaluated by the plugin's engine). Each copy is held to its plugin by a parity
+ * test and a fingerprint of the copied source.
+ *
  * Nothing here is cached beyond the request. The answer depends on cohort
  * membership, which can change without an event: tool_dynamic_cohorts, for
  * one, writes cohort_members in bulk without firing cohort_member_added or
@@ -164,8 +171,13 @@ class access {
         self::BLOCKED_OFF,
     ];
 
-    /** The enrol plugins the next action has a rule for; any other method offers a learner nothing to act on. */
-    private const ROUTE_PLUGINS = ['self', 'apply', 'fee', 'paypal', 'guest', 'autoenrol', 'coursecompleted'];
+    /**
+     * The enrol plugins the next action has a rule for; any other method offers a learner nothing to act on.
+     *
+     * A route's kind is the plugin name, so enrol_conditional's route reads 'conditional': it shares
+     * only its spelling with {@see NEXT_CONDITIONAL}, which stays enrol_coursecompleted's promise.
+     */
+    private const ROUTE_PLUGINS = ['self', 'apply', 'fee', 'paypal', 'guest', 'autoenrol', 'coursecompleted', 'conditional'];
 
     /** The next action of a viewer who is offered nothing. */
     private const NO_NEXT_ACTION = [
@@ -195,7 +207,10 @@ class access {
     /** @var array Request cache of a course's enabled instances, keyed courseid => what enrol_get_instances() returns. */
     private static array $instances = [];
 
-    /** @var array Request cache of what can_self_enrol() reads per viewer, keyed "userid:instanceid" => facts. */
+    /**
+     * @var array Request cache of what the self-service rules read per viewer, keyed "userid:instanceid" => facts:
+     *      {holdsrow, taken, incohort} for enrol_self, {holdsrow, taken} for enrol_conditional.
+     */
     private static array $selffacts = [];
 
     /**
@@ -474,13 +489,17 @@ class access {
      * 1. the course contexts, with every enabled instance of those courses: the rows of
      *    enrol_get_instances($courseid, true), in its order and with its filter;
      * 2. every row the viewer holds, driven by their user id alone: the answer of
-     *    {@see get_enrolment_state()} for each course, and the own-row test of enrol_self;
-     * 3. the viewer's cohorts, only when a self enrolment instance restricts by one;
-     * 4. one grouped count of the rows on every capped self enrolment instance.
+     *    {@see get_enrolment_state()} for each course, and the own-row test of enrol_self and
+     *    enrol_conditional;
+     * 3. the viewer's cohorts, only when a self enrolment instance restricts by one (an
+     *    enrol_conditional instance never does: its cohort is a condition in its tree);
+     * 4. one grouped count of the rows on every capped self or conditional instance.
      *
      * Statements 2 to 4 are skipped for a course whose viewer is staff of it, the term
      * {@see compute_course_relationship()} asks first, and 3 and 4 for a course its enrolment
-     * state already keeps. Nothing is primed with a value the per-course call could not have
+     * state already keeps. The conditions of an enrol_conditional instance are not read here: they
+     * are evaluated per instance by {@see conditional_outcome()}, at whatever the conditions read
+     * themselves. Nothing is primed with a value the per-course call could not have
      * produced: each memo holds what the statement it replaces reads, from the same rows. A course
      * that is not primed is computed as before, so priming is an optimisation, never a term.
      *
@@ -571,6 +590,7 @@ class access {
 
         $now = time();
         $selfinstances = [];
+        $conditionalinstances = [];
         foreach ($open as $courseid) {
             $key = self::memo_key($viewer, $courseid);
             if (!isset(self::$enrolmentstate[$key])) {
@@ -582,10 +602,12 @@ class access {
             foreach (self::$instances[$courseid] ?? [] as $instance) {
                 if ($instance->enrol === 'self') {
                     $selfinstances[] = $instance;
+                } else if ($instance->enrol === 'conditional') {
+                    $conditionalinstances[] = $instance;
                 }
             }
         }
-        if (!$selfinstances) {
+        if (!$selfinstances && !$conditionalinstances) {
             return;
         }
 
@@ -597,6 +619,12 @@ class access {
             if ($instance->customint5) {
                 $restricted = true;
             }
+            if ($instance->customint3 > 0) {
+                $capped[] = (int) $instance->id;
+            }
+        }
+        foreach ($conditionalinstances as $instance) {
+            // Enrol_conditional keeps its limit where enrol_self does, and its customint5 means nothing.
             if ($instance->customint3 > 0) {
                 $capped[] = (int) $instance->id;
             }
@@ -633,6 +661,13 @@ class access {
                 'holdsrow' => isset($held[$id]),
                 'taken' => (int) ($taken[$id] ?? 0),
                 'incohort' => isset($cohorts[(int) $instance->customint5]),
+            ];
+        }
+        foreach ($conditionalinstances as $instance) {
+            $conditionalid = (int) $instance->id;
+            self::$selffacts[self::memo_key($viewer, $conditionalid)] = [
+                'holdsrow' => isset($held[$conditionalid]),
+                'taken' => (int) ($taken[$conditionalid] ?? 0),
             ];
         }
     }
@@ -965,10 +1000,12 @@ class access {
      * still ahead among the instances whose ONLY refusal is that their window has not opened yet.
      * Each such instance is asked again by the same rule, as if its window were open
      * ({@see opening_date()}), and counts when it then offers a route (self, apply, fee, paypal,
-     * autoenrol). An instance that would still refuse - full, a cohort, the viewer's own row, new
-     * enrolments off, the self enrolment capability, autoenrol's rule - gives no date, nor does a
-     * window that has closed or one that ends before it starts, nor enrol_coursecompleted, which
-     * offers no route. Filled only when the summary is blocked; `blocked` stays the most useful
+     * autoenrol, conditional). An instance that would still refuse - full, a cohort, the viewer's
+     * own row, new enrolments off, the self enrolment capability, autoenrol's rule, the conditions
+     * of enrol_conditional as they stand now - gives no date, nor does a window that has closed or
+     * one that ends before it starts, nor enrol_coursecompleted, which offers no route. A date
+     * condition inside an enrol_conditional tree gives no date either: the engine has no API that
+     * says when a tree will be met. Filled only when the summary is blocked; `blocked` stays the most useful
      * reason across the instances, so it reads window unless another instance's refusal outranks
      * it, and a consumer that shows the date reads `opens`, never `blocked`. Like an open route, a
      * date says when the instance's own rule admits the viewer, not that a key, a payment or an
@@ -991,10 +1028,16 @@ class access {
      *   viewer actively enrolled in the course it names. Anyone else has no tie to the
      *   prerequisite and is offered nothing by it, not even a refusal: naming the course to them
      *   would defeat the unlisting.
+     * - conditional (route; enrol_conditional): {@see conditional_outcome()}, a copy of the
+     *   plugin's can_self_enrol($instance, false) - window, new enrolments, own row, places, the
+     *   enrol/conditional:enrolself capability - with the condition tree evaluated through the
+     *   plugin's evaluate_conditions(), admitted only when met (an unknown result refuses). Its
+     *   route kind is 'conditional', the plugin name; it has nothing to do with the conditional
+     *   summary above, which is enrol_coursecompleted's.
      *
      * The reason of a refusal is read from the instance in the plugin's own order of checks,
      * after the plugin said no; a refusal those fields do not explain (the self enrolment
-     * capability, autoenrol's rule) is off.
+     * capability, autoenrol's rule, enrol_conditional's capability or conditions) is off.
      *
      * This answers what may be done, not whether the course may be named: a caller that prints
      * it for a course in a listing must already have filtered the listing with
@@ -1078,11 +1121,14 @@ class access {
     /**
      * What one enabled instance offers the current user, asking the plugin's own methods.
      *
-     * The methods outside core are optional here. allow_apply() and enrol_allowed() are called
-     * through the plugin object behind is_callable(), because a build without them may be
-     * installed and naming a class of theirs would need the autoloader to find it;
-     * coursecompleted is read from its instance alone. The applicant limit is checked separately
-     * because allow_apply() does not check it.
+     * The methods outside core are optional here. allow_apply(), enrol_allowed() and
+     * evaluate_conditions() are called through the plugin object behind is_callable(), because a
+     * build without them may be installed and naming a class of theirs (or of
+     * local_enrolconditions, enrol_conditional's engine) would need the autoloader to find it; a
+     * build without the method offers nothing. coursecompleted is read from its instance alone.
+     * The applicant limit is checked separately because allow_apply() does not check it.
+     * enrol_conditional is decided by {@see conditional_outcome()}, the one rule every door of
+     * this class asks about that method.
      *
      * Every method but guest also enforces an enrolment window, and some a places limit, so an
      * unlisted course disappears from the listing while its window is shut or once it is full.
@@ -1186,6 +1232,12 @@ class access {
             return self::completed_outcome($instance, $now, self::holds_enrolment($instance));
         }
 
+        if ($instance->enrol === 'conditional' && is_callable([$plugin, 'evaluate_conditions'])) {
+            // The facts prime_probe() read for this viewer's listing, or null to read them here when the rule needs them.
+            $factskey = self::memo_key((int) $USER->id, (int) $instance->id);
+            return self::conditional_outcome($instance, $plugin, $now, self::$selffacts[$factskey] ?? null);
+        }
+
         return null;
     }
 
@@ -1193,11 +1245,13 @@ class access {
      * What the current user may do next to join each of these courses, in a fixed number of statements.
      *
      * The batch form of {@see get_next_action()} for a page of courses, ported from the
-     * classifier of the theme's category showcase: it never asks a plugin per course, it reads
+     * classifier of the theme's category showcase: it never asks a plugin per course (save
+     * enrol_conditional's conditions, below), it reads
      * what each plugin's rule reads from the instance and from at most four bulk statements, all
      * array-returning, so the count is the same on PostgreSQL and MariaDB:
      *
-     * 1. the enabled instances of the enabled plugins this class has a rule for, in these courses;
+     * 1. the enabled instances of the enabled plugins this class has a rule for, in these courses,
+     *    whole rows, because enrol_conditional's conditions receive the instance;
      * 2. every row the viewer holds, driven by their user id alone (the own-row tests, autoenrol's
      *    "already enrolled" test and the course completed prerequisite all read from it);
      * 3. the viewer's cohorts, only when an instance restricts by one;
@@ -1210,11 +1264,19 @@ class access {
      * therefore never decide whether a course may be named: discoverability always goes through
      * {@see filter_courses()}, which asks the plugins.
      *
+     * enrol_conditional is the exception that drops nothing: an instance that passes every check
+     * read from the statements above has its capability checked (the contexts come with statement
+     * 1) and its conditions evaluated, through the one rule the per-course path asks
+     * ({@see conditional_outcome()}), so the batch answers exactly what {@see get_next_action()}
+     * answers for that method. The fixed statements then gain whatever the conditions of each such
+     * instance read themselves, per instance: the engine has no bulk API.
+     *
      * The opening date is the exception, because a date is a promise a card prints: it may only
      * err towards null. Before dating an instance the batch reads the two dropped checks
      * ({@see batch_vouches()}): the capability from the course context, preloaded by the first
      * statement and checked against the viewer's access data, loaded once per request; and the
-     * autoenrol rule, which it cannot judge, so an instance with one is never dated here.
+     * autoenrol rule, which it cannot judge, so an instance with one is never dated here. An
+     * enrol_conditional instance needs neither: its rule already asked both.
      *
      * The four statements hold for up to {@see id_chunks::SIZE} course ids, which go into one IN
      * list; past that, statements 1 and 4 run once per chunk of that size, so a longer list stays
@@ -1244,6 +1306,7 @@ class access {
             if (
                 ($name === 'apply' && !is_callable([$plugin, 'allow_apply']))
                 || ($name === 'autoenrol' && !is_callable([$plugin, 'enrol_allowed']))
+                || ($name === 'conditional' && !is_callable([$plugin, 'evaluate_conditions']))
             ) {
                 continue;
             }
@@ -1254,7 +1317,8 @@ class access {
         }
 
         /* 1. The enabled instances, in each course's own order of methods. A course's instances
-           all come from the chunk it is in, so each course keeps that order whatever the chunks. */
+           all come from the chunk it is in, so each course keeps that order whatever the chunks.
+           The whole row: enrol_conditional's engine hands it to every condition, which may read any field. */
         [$pluginsql, $pluginparams] = $DB->get_in_or_equal(array_keys($plugins), SQL_PARAMS_NAMED, 'plg');
         $ctxfields = \core\context_helper::get_preload_record_columns_sql('ctx');
         $instances = id_chunks::read(
@@ -1262,9 +1326,7 @@ class access {
             function (array $chunk) use ($DB, $pluginsql, $pluginparams, $ctxfields): array {
                 [$coursesql, $courseparams] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED, 'crs');
                 return $DB->get_records_sql(
-                    "SELECT e.id, e.courseid, e.enrol, e.enrolstartdate, e.enrolenddate, e.password, e.cost,
-                            e.customint1, e.customint3, e.customint4, e.customint5, e.customint6, e.customint8,
-                            e.customtext2, {$ctxfields}
+                    "SELECT e.*, {$ctxfields}
                        FROM {enrol} e
                   LEFT JOIN {context} ctx ON ctx.instanceid = e.courseid AND ctx.contextlevel = :courselevel
                       WHERE e.courseid {$coursesql} AND e.status = :enabled AND e.enrol {$pluginsql}
@@ -1303,7 +1365,8 @@ class access {
             }
         }
 
-        // Enrol_self and enrol_apply: a cohort in customint5, a limit in customint3. Enrol_autoenrol: a limit in customint5.
+        /* Enrol_self and enrol_apply: a cohort in customint5, a limit in customint3. Enrol_autoenrol: a limit in
+           customint5. Enrol_conditional: a limit in customint3, and no cohort (it is a condition of its tree). */
         $restricted = false;
         $capped = [];
         foreach ($instances as $instance) {
@@ -1313,6 +1376,7 @@ class access {
             }
             $cap = match ($instance->enrol) {
                 'self', 'apply' => (int) $instance->customint3,
+                'conditional' => (int) $instance->customint3,
                 'autoenrol' => (int) $instance->customint5,
                 default => 0,
             };
@@ -1439,6 +1503,10 @@ class access {
 
             case 'coursecompleted':
                 return $prerequisite ? self::completed_outcome($instance, $now, $holdsrow) : null;
+
+            case 'conditional':
+                // Nothing dropped: the per-course rule itself, its two statements answered from the bulk reads.
+                return self::conditional_outcome($instance, $plugin, $now, ['holdsrow' => $holdsrow, 'taken' => $taken]);
 
             default:
                 return null;
@@ -1645,6 +1713,75 @@ class access {
         $outcome = self::outcome($instance, self::NEXT_CONDITIONAL);
         $outcome['prerequisiteid'] = (int) $instance->customint1;
         return $outcome;
+    }
+
+    /**
+     * What an enrol_conditional instance offers the current user: the one rule every door asks.
+     *
+     * Copies enrol_conditional_plugin::can_self_enrol($instance, false) - its protected
+     * get_self_enrol_status() and the get_instance_status() behind is_self_enrol_available() - check
+     * for check and in its order: the instance enabled, inside its window, new enrolments on
+     * (customint6), no row of the viewer's on it in any status, a place left under customint3, the
+     * enrol/conditional:enrolself capability in the course, and the condition tree. There is no
+     * cohort check: the method keeps its cohort as a condition, and customint5 means nothing to it.
+     * The plugin is not called itself because it renders the reasons of a refusal through $OUTPUT
+     * and reads its own row and count per instance, which a listing must not pay per course;
+     * tests/access_conditional_test.php holds this copy to the plugin by a parity test on every
+     * path and a fingerprint of the four methods.
+     *
+     * The capability and the conditions both refuse as off, on purpose: the reason does not tell
+     * which of the two refused. The capability is asked first because it costs no statement (the
+     * access data is loaded once per request, the course contexts are preloaded by the listing and
+     * the batch); the order of the two is not observable. The conditions are evaluated through the
+     * plugin's own evaluate_conditions(), read-only and without rendering, and admit only when it
+     * answers null (no conditions) or a result whose is_met() is strictly true: an unknown result
+     * (an invalid tree, a condition type not installed or disabled, a condition that threw) refuses,
+     * as the plugin refuses a new enrolment on it. Each condition reads what it reads, per instance:
+     * the engine has no bulk API.
+     *
+     * Callers ask only for a logged-in user who is not the guest account ({@see viewer_context()},
+     * {@see refuses_viewer()}); the engine is never asked about a visitor or a guest, whom core's
+     * write-capability rule refuses here as well.
+     *
+     * @param \stdClass $instance Enrol instance of enrol_conditional, the whole row: the conditions receive it.
+     * @param \enrol_plugin $plugin The instance's plugin, which has evaluate_conditions().
+     * @param int $now The time the window is judged against.
+     * @param array|null $facts {holdsrow: bool, taken: int}, as {@see prime_probe()} and the batch read
+     *        them in bulk; null to read each one here, only when the checks before it have passed.
+     * @return array The outcome ({@see outcome()}).
+     */
+    private static function conditional_outcome(\stdClass $instance, \enrol_plugin $plugin, int $now, ?array $facts): array {
+        global $USER;
+
+        if ((int) $instance->status !== ENROL_INSTANCE_ENABLED) {
+            return self::outcome($instance, self::NEXT_BLOCKED, self::BLOCKED_OFF);
+        }
+        if (!self::inside_window($instance, $now)) {
+            return self::outcome($instance, self::NEXT_BLOCKED, self::BLOCKED_WINDOW);
+        }
+        if ((int) $instance->customint6 === 0) {
+            return self::outcome($instance, self::NEXT_BLOCKED, self::BLOCKED_OFF);
+        }
+        $ownrow = $facts !== null ? $facts['holdsrow'] : self::holds_enrolment($instance);
+        if ($ownrow) {
+            return self::outcome($instance, self::NEXT_BLOCKED, self::BLOCKED_OWN_ROW);
+        }
+        $places = (int) $instance->customint3;
+        if ($places > 0) {
+            $occupied = $facts !== null ? $facts['taken'] : self::places_taken($instance, $places);
+            if ($occupied >= $places) {
+                return self::outcome($instance, self::NEXT_BLOCKED, self::BLOCKED_FULL);
+            }
+        }
+        $context = \core\context\course::instance((int) $instance->courseid, IGNORE_MISSING);
+        if (!$context || !has_capability('enrol/conditional:enrolself', $context)) {
+            return self::outcome($instance, self::NEXT_BLOCKED, self::BLOCKED_OFF);
+        }
+        $result = $plugin->evaluate_conditions($instance, (int) $USER->id);
+        if ($result !== null && $result->is_met() !== true) {
+            return self::outcome($instance, self::NEXT_BLOCKED, self::BLOCKED_OFF);
+        }
+        return self::outcome($instance, self::NEXT_OPEN);
     }
 
     /**

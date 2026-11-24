@@ -1,0 +1,16 @@
+# Local-only extra plugins for moodle-dev's `mdl ci` (bin/lib/local-extras.sh there).
+# GitHub's CI never reads this file, and it is export-ignored: the enrol_conditional rule of
+# access::conditional_outcome() is a copy of that method's own check, held to it by
+# tests/access_conditional_test.php, and those tests and the `conditional_*` mutation gates
+# skip wherever the method is absent. Installing it here lets the local gate and
+# `mdl mutate --fast` run them on every 5.3 leg and on both database families.
+#
+# The checkout must contain the fleet's audited line of the fork: the fingerprint test pins
+# the source of the four methods the rule copies as that line has them, and upstream's `main`
+# spells them differently. Its engine, local_enrolconditions, arrives through the method's own
+# $plugin->dependencies.
+extra-plugins:
+  - repo: moodle-enrol_conditional
+    path: enrol/conditional
+    branches: [MOODLE_503_STABLE]
+    ref: fleet/audit-2026-11-23

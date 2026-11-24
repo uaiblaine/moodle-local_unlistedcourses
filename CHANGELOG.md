@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Added
+
+- `enrol_conditional` is a route in. An unlisted course whose self-service method is an
+  `enrol_conditional` instance is now discoverable to a viewer that instance would enrol, and
+  `get_next_action()` and `get_next_actions()` answer `open` with a route of kind `conditional`
+  (the plugin name; unrelated to the `conditional` next action of `enrol_coursecompleted`). The
+  rule copies the plugin's own self enrolment checks - window, new enrolments, the viewer's own
+  row, places, the `enrol/conditional:enrolself` capability - and has the plugin evaluate the
+  condition tree; a tree the engine cannot judge refuses. The per-course answer, the listing
+  probe and the batch ask the same rule, so the batch answers exactly what the per-course form
+  answers for this method; its first statement now reads whole instance rows, and it pays
+  whatever the conditions of each such instance read. `opens` dates such an instance only when
+  the viewer meets its conditions now; a date condition inside the tree gives no date. Optional:
+  nothing changes on a site without `enrol_conditional` or with a build that lacks
+  `evaluate_conditions()`.
+
 ## v5.3-r5 (2026100512) - 2026-11-15
 
 Report builder data sources for the discoverability states, a deletion with its contents moved
