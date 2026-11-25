@@ -46,6 +46,10 @@
     * roleholders - int, people holding a role here or in a category above this one.
     * visiblecount - int, distinct people the category stays visible to, staff aside.
     * nobodywarning - bool, unlisted and visible to nobody besides staff.
+    * relistcourses - int, public courses below that listing this category again would make public.
+    * relistcategories - int, public subcategories below that listing this category again would make public.
+    * relistwarning - bool, unlisted, and listing it again would make at least one of them public.
+    * relistblocked - bool, the viewer may not publish all of them, so may not list it again.
     * themewarning - bool, category themes are enabled on this site.
 
     The example context below exercises the unlisted branch, the only one the mustache lint
@@ -70,6 +74,10 @@
         "roleholders": 4,
         "visiblecount": 61,
         "nobodywarning": false,
+        "relistcourses": 3,
+        "relistcategories": 1,
+        "relistwarning": true,
+        "relistblocked": true,
         "themewarning": true
     }
 }}
@@ -114,6 +122,14 @@
     {{#nobodywarning}}
         <div class="alert alert-warning" role="alert">{{#str}}preview_visiblenone, local_unlistedcourses{{/str}}</div>
     {{/nobodywarning}}
+    {{#relistwarning}}
+        <div class="alert alert-warning" role="alert">
+            <p class="mb-0">{{#str}}preview_relist, local_unlistedcourses, { "courses": {{relistcourses}}, "categories": {{relistcategories}} }{{/str}}</p>
+            {{#relistblocked}}
+                <p class="mb-0 mt-2">{{#str}}preview_relistblocked, local_unlistedcourses{{/str}}</p>
+            {{/relistblocked}}
+        </div>
+    {{/relistwarning}}
     {{/public}}
     {{#themewarning}}
         <div class="alert alert-warning" role="alert">{{#str}}preview_theme, local_unlistedcourses{{/str}}</div>

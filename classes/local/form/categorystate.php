@@ -40,7 +40,11 @@ require_once($CFG->libdir . '/formslib.php');
  * set. A category that is already public shows its value frozen, and frozen
  * persistently - the value still submits - so that saving this form leaves
  * the state where it was and never fails over a value the editor did not
- * touch. The strings are the course side's own: a listed category and a listed
+ * touch. An unlisted category is frozen the same way for a user who may not
+ * publish every course and category that listing it again would make public
+ * ({@see category_discoverability::may_relist()}), and the preview says that
+ * somebody who may publish them has to list it. The strings are the course
+ * side's own: a listed category and a listed
  * course mean the same thing to a reader.
  *
  * None of this is a security boundary. The boundary is
@@ -64,7 +68,7 @@ class categorystate extends \moodleform {
      * @return void
      */
     protected function definition(): void {
-        global $OUTPUT;
+        global $OUTPUT, $USER;
 
         $mform = $this->_form;
         $id = (int) $this->_customdata['id'];
@@ -89,7 +93,15 @@ class categorystate extends \moodleform {
         $mform->setDefault('state', $current);
         $mform->addHelpButton('state', 'categorystate', 'local_unlistedcourses');
 
-        if ($current === category_discoverability::STATE_PUBLIC && !$canpublish) {
+        /* Leaving the unlisted state publishes what the category held back, so a user who may not
+           publish all of it may not leave it; set_state() refuses that save, and the control says
+           so up front. Read once, here, and handed to the preview, which counts the same rows. */
+        $activations = $current === category_discoverability::STATE_UNLISTED
+            ? category_discoverability::relist_activations($id)
+            : null;
+        $mayrelist = $activations === null || category_discoverability::may_relist($id, (int) $USER->id, $activations);
+
+        if (($current === category_discoverability::STATE_PUBLIC && !$canpublish) || !$mayrelist) {
             // Persistent freeze: the value is displayed as text and re-submitted through a hidden input.
             $mform->getElement('state')->setPersistantFreeze(true);
             $mform->freeze('state');
@@ -98,7 +110,7 @@ class categorystate extends \moodleform {
         /* Trusted server-rendered HTML: a static element writes its content raw, and this
            content is a template of this plugin's own with every name already escaped for
            the stash it lands in. */
-        $preview = $OUTPUT->render(new category_preview($category, $context));
+        $preview = $OUTPUT->render(new category_preview($category, $context, $activations));
         $mform->addElement('static', 'preview', '', $preview);
 
         $this->add_action_buttons(true, get_string('savechanges'));

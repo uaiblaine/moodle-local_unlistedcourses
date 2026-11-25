@@ -154,6 +154,11 @@ class courseform {
      * gives the course the default instead; on an update the hook runs before the row is
      * written, so set_state() refuses it there.
      *
+     * A value that names no state counts as no element at all, by the restore's rule
+     * ({@see \restore_local_unlistedcourses_plugin::process_local_unlistedcourses_state()}): an
+     * int cast would read an empty or non-numeric value as listed, over an unlisted creation
+     * default, and hand an unknown number to set_state(), which throws after the insert.
+     *
      * @param \stdClass $data The submitted course data.
      * @param bool $isnewcourse Whether the course was just created.
      * @return void
@@ -166,7 +171,10 @@ class courseform {
         if ($state !== null && !self::offered((int) $data->id, $isnewcourse)) {
             $state = null;
         }
-        $public = $state !== null && (int) $state === discoverability::STATE_PUBLIC;
+        if ($state !== null) {
+            $state = self::named_state($state);
+        }
+        $public = $state === discoverability::STATE_PUBLIC;
         if ($isnewcourse && $public && !self::may_publish((int) $data->id)) {
             // The course row exists already: a refusal from set_state() would leave it listed, so it gets the default.
             $state = null;
@@ -177,7 +185,32 @@ class courseform {
             }
             $state = discoverability::get_creation_default();
         }
-        discoverability::set_state((int) $data->id, (int) $state);
+        discoverability::set_state((int) $data->id, $state);
+    }
+
+    /**
+     * The state a submitted value names, or null when it names none.
+     *
+     * The form's own element arrives as an int (PARAM_INT); a caller of create_course() or
+     * update_course() may hand over a string, which counts when, trimmed, it is a whole number.
+     * Anything else (an empty or non-numeric string, a float, a boolean, an array) names no state,
+     * and neither does a number outside {@see discoverability::states()}.
+     *
+     * @param mixed $value The element's value.
+     * @return int|null One of the state constants, or null.
+     */
+    private static function named_state(mixed $value): ?int {
+        if (is_string($value)) {
+            $value = trim($value);
+            if (!preg_match('/^-?\d+\z/', $value)) {
+                return null;
+            }
+            $value = (int) $value;
+        }
+        if (!is_int($value) || !in_array($value, discoverability::states(), true)) {
+            return null;
+        }
+        return $value;
     }
 
     /**
