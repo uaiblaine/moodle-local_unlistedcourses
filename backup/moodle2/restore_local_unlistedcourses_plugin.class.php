@@ -86,10 +86,20 @@ class restore_local_unlistedcourses_plugin extends restore_local_plugin {
      * refuses (public, for a restorer without the publish capability), leave it false, so a new course
      * falls back to the restore default, which is listed or unlisted and never public.
      *
+     * The site course has no state, and set_state() refuses it, but its backup carries the element
+     * like every other course's, and core restores that backup over the site course with its
+     * configuration overwritten: the element is skipped there before anything is asked. Nothing is
+     * logged, as nothing was refused. after_execute_course() never reaches the site course either:
+     * it acts only on TARGET_NEW_COURSE, and every new-course restore core offers (the restore page,
+     * course copy, duplicate) creates the course first.
+     *
      * @param array $data The parsed state element.
      * @return void
      */
     public function process_local_unlistedcourses_state($data) {
+        if ((int) $this->task->get_courseid() === (int) SITEID) {
+            return;
+        }
         $data = (object) $data;
         $raw = isset($data->state) ? trim((string) $data->state) : '';
         // An empty or non-numeric value is not a state: an int cast would read it as 0, listed.

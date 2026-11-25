@@ -9,8 +9,8 @@ listed, unlisted, or public (served to visitors who are not logged in, under
 `forcelogin = 1`) — and **the same three states per course category**. Two
 tables (`local_unlistedcourses_state`, `local_unlistedcourses_catstate`, a row only for
 non-default states), **three capabilities** (`local/unlistedcourses:publish`,
-`local/unlistedcourses:managecategorystate`, `local/unlistedcourses:publishcategory`), two
-events, two settings (the default state of a new course and of a course restored from a
+`local/unlistedcourses:managecategorystate`, `local/unlistedcourses:publishcategory`), three
+events (`course_state_updated`, `category_state_updated`, `public_state_kept_after_move`), two settings (the default state of a new course and of a course restored from a
 backup without one, listed or unlisted, never public), two pages
 (`category.php`, the category's editing surface, with one template for its preview, and
 `applydefault.php`, which queues the adhoc task `task\apply_default_state` that gives the
@@ -32,6 +32,8 @@ mdl behat m502 @local_unlistedcourses
 mdl ci moodle-local_unlistedcourses --matrix
 mdl mutate moodle-local_unlistedcourses \
   /Users/uaiblaine/dev/moodle-local_unlistedcourses/mutations/gates.conf --stack m502
+mdl mutate moodle-local_unlistedcourses \
+  /Users/uaiblaine/dev/moodle-local_unlistedcourses/mutations/category_relist.conf --fast --db pgsql
 ```
 
 ## Agent orchestration budget (fleet rule, repeated here on purpose)
@@ -90,7 +92,13 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   that order. A category is effectively public when its own state says so, it is visible,
   every ancestor exists and is visible, and no ancestor is unlisted — ancestors need NOT be
   public. The most-specific rule decides the rest: an UNLISTED course inside a PUBLIC
-  category is never public, and neither is an UNLISTED subcategory.
+  category is never public, and neither is an UNLISTED subcategory. **Leaving UNLISTED is a third
+  check** (`require_relist_allowed()`): `publish` / `publishcategory` at the context of each row
+  `relist_activations()` would make public, predicted by `would_be_public()` / `compose()` — the
+  same composition as `are_public()`, never a copy, read again with the memos reset — because
+  listing must not publish what its lister could not. Every transition to a state other than
+  unlisted takes the site-wide `state_lock::category_relist()` before the row lock, or two relists
+  of nested categories each predict that the other still holds a course back.
 - **`are_public()` is four statements for any N, and `is_public()` delegates to it** on both
   classes, so the two can never disagree. It is memoised per id for the request with NO
   viewer in the key, and it is **non-throwing**: the ids reach it from an anonymous surface,
@@ -135,7 +143,9 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   `create_course()`/`update_course()`, by asking what `extend()` asks
   (`moodle/course:visibility`, guessed for the creator on a new course). It drops the element
   rather than throwing because `create_course()` runs the hook after the insert, with no
-  transaction: a refusal would leave the new course listed, the very change refused.
+  transaction: a refusal would leave the new course listed, the very change refused. For the same
+  reason a value that names no state (`named_state()`: an int, or a trimmed whole-number string,
+  among `states()`) is no element at all — never an int cast, which reads `''` as listed.
 - **A call that changes nothing needs no capability.** That is what lets the course form
   re-submit "public" from a frozen control when an editor who may not publish saves an
   unrelated change. Remove the short circuit and that save throws.
@@ -145,7 +155,10 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   twice: once lock-free, so a save that changes nothing takes no lock, and once under the lock;
   the `noop_transition` gates disable both copies. `state_lock_test` plays the other writer
   through a fixture lock factory (`$CFG->lock_factory`): the database factories grant a second
-  instance in the same process the lock the first one holds.
+  instance in the same process the lock the first one holds. The backfill inserts without the lock
+  on purpose, so a course's first insert can still collide: `write()` answers busy when the row is
+  there and rethrows otherwise or inside a transaction (PostgreSQL has aborted it); its test plays
+  the first writer through the protected `insert_row()` seam (`tests/fixtures/first_writer_discoverability.php`).
 - **The frozen control must persist.** `$mform->freeze()` on its own exports the element's
   DEFAULT, not its value (`formslib.php:2410`). Both forms set that default to the current
   state, so a plain freeze would resubmit the same state, but the persistent freeze makes the
@@ -217,7 +230,8 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   inside `create_course()`, before `course/edit.php` gives `creatornewroleid`, so a guessed
   publish was refused after the insert and left the course listed. `save()` drops a public value
   on a new course from a user who may not publish to the creation default for the same reason.
-- **The site course has no state.** `set_state()` refuses it; the form skips it; a row
+- **The site course has no state.** `set_state()` refuses it; the form skips it; the restore
+  returns before asking for it (core restores the site home's backup, element included, over it); a row
   written by hand for it is what the SITEID exemption in `access::compute_course_relationship()`
   exists for, and its test writes exactly that row.
 - **An unknown stored value reads as listed, never as public.** Both `get_states()` and
@@ -279,7 +293,9 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
 - **`enrol_apply` is absent from a fresh test site's `enrol_plugins_enabled`** —
   `add_apply_enrol()` in `access_test` enables it first.
 - **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds a hundred and
-  seventy-three guards, and each must redden a test. The apply, autoenrol and coursecompleted gates need a
+  eighty-two guards, and each must redden a test; the relist check, its prediction, preview, form and
+  site-wide lock have their own spec, `mutations/category_relist.conf` (twenty-five), swept with
+  `--fast` on both database families. The apply, autoenrol and coursecompleted gates need a
   stack that mounts those plugins: m502 and m502b mount all three. `mdl ci`, and so
   `mdl mutate --fast`, installs none of them, skips their tests and reads those gates as held
   by nothing. Adding a
@@ -369,7 +385,10 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   pending-backup refusal (5.3's has, and its test uses that). The one pre-delete callback in `lib.php`
   (`pre_course_category_delete_move`) only reads: it records the public rows a move would make
   effective, and the observer takes those back to listed once the deletion is certain
-  (`local\delete_move_guard`). A deletion with a move publishes nothing.
+  (`local\delete_move_guard`). A deletion with a move publishes nothing; a row skipped on a busy
+  lock fires `public_state_kept_after_move`, because `debugging()` alone is silent on a production
+  site. `record()` resets the request memos first (a stale public answer hides a row from it).
+  `unpublish_after_move()` is for the guard alone and says so in prose: moodle-cs warns on `@internal`.
 - **Core's Behat cohort generator places a cohort in a category context** through
   `contextlevel | reference` columns (`behat_core_generator::preprocess_cohort()`); the
   plugin's own context file, `tests/behat/behat_local_unlistedcourses.php`, provides only the

@@ -63,6 +63,12 @@ use local_unlistedcourses\category_discoverability;
  * and the "visible to nobody" warning is computed from the counts, never from
  * the list of names they may not read.
  *
+ * An unlisted category also says what listing it again would make public: the
+ * public courses and subcategories below it that only it holds back, counted by
+ * {@see category_discoverability::relist_activations()}, the rule set_state()
+ * decides with. When the viewer may not publish all of them, it says that
+ * somebody who may has to list it; the form freezes the control on the same answer.
+ *
  * @package    local_unlistedcourses
  * @copyright  2026 Anderson Blaine
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
@@ -77,15 +83,21 @@ class category_preview implements \renderable, \templatable {
     /** @var \core\context\coursecat The category's own context. */
     private \core\context\coursecat $context;
 
+    /** @var array|null What listing the category again would make public, when the caller read it already. */
+    private ?array $activations;
+
     /**
      * Build the preview of one category.
      *
      * @param \core_course_category $category The category being edited.
      * @param \core\context\coursecat $context Its own context.
+     * @param array|null $activations What {@see category_discoverability::relist_activations()} returned for it, when the
+     *   caller read it already; null to read it here.
      */
-    public function __construct(\core_course_category $category, \core\context\coursecat $context) {
+    public function __construct(\core_course_category $category, \core\context\coursecat $context, ?array $activations = null) {
         $this->category = $category;
         $this->context = $context;
+        $this->activations = $activations;
     }
 
     /**
@@ -95,7 +107,7 @@ class category_preview implements \renderable, \templatable {
      * @return array The template context.
      */
     public function export_for_template(\renderer_base $output): array {
-        global $CFG;
+        global $CFG, $USER;
 
         require_once($CFG->dirroot . '/cohort/lib.php');
 
@@ -131,6 +143,16 @@ class category_preview implements \renderable, \templatable {
            with a listing limit or with who is reading it. */
         $visiblecount = self::count_eligible($categoryid, $pathids, $unlistedancestors);
 
+        /* What listing it again would make public is counted for everybody, like the figures
+           above; whether this viewer may do it is the one answer here about the viewer, and it
+           is set_state()'s own rule, read through its non-throwing twin. */
+        $activations = $unlisted
+            ? ($this->activations ?? category_discoverability::relist_activations($categoryid))
+            : ['courses' => [], 'categories' => []];
+        $relistcourses = count($activations['courses']);
+        $relistcategories = count($activations['categories']);
+        $relistwarning = $relistcourses + $relistcategories > 0;
+
         return [
             'state' => $state,
             'unlisted' => $unlisted,
@@ -146,6 +168,11 @@ class category_preview implements \renderable, \templatable {
             'roleholders' => self::count_role_holders($pathids),
             'visiblecount' => $visiblecount,
             'nobodywarning' => $unlisted && $visiblecount === 0,
+            'relistcourses' => $relistcourses,
+            'relistcategories' => $relistcategories,
+            'relistwarning' => $relistwarning,
+            'relistblocked' => $relistwarning
+                && !category_discoverability::may_relist($categoryid, (int) $USER->id, $activations),
             'themewarning' => self::theme_warning(),
         ];
     }
@@ -199,6 +226,10 @@ class category_preview implements \renderable, \templatable {
             'roleholders' => 0,
             'visiblecount' => 0,
             'nobodywarning' => false,
+            'relistcourses' => 0,
+            'relistcategories' => 0,
+            'relistwarning' => false,
+            'relistblocked' => false,
             'themewarning' => self::theme_warning(),
         ];
     }

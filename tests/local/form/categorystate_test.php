@@ -25,6 +25,7 @@
 namespace local_unlistedcourses\local\form;
 
 use local_unlistedcourses\category_discoverability;
+use local_unlistedcourses\discoverability;
 use PHPUnit\Framework\Attributes\CoversClass;
 
 /**
@@ -349,5 +350,134 @@ final class categorystate_test extends \advanced_testcase {
         $tag = $matches[0];
         $this->assertStringContainsString('type="hidden"', $tag);
         $this->assertStringContainsString('value="' . $category->id . '"', $tag);
+    }
+
+    /**
+     * Give a user a capability in a context, through a role of its own assigned there.
+     *
+     * @param \stdClass $user The user.
+     * @param string $capability The capability.
+     * @param \context $context The context.
+     * @return void
+     */
+    private function grant(\stdClass $user, string $capability, \context $context): void {
+        $roleid = $this->getDataGenerator()->create_role();
+        assign_capability($capability, CAP_ALLOW, $roleid, $context->id, true);
+        role_assign($roleid, $user->id, $context->id);
+    }
+
+    /**
+     * An unlisted category under a root holding a public course, a delegate at the root, and a publisher of the course.
+     *
+     * @return array The root, the unlisted category, the course, the delegate and the publisher.
+     */
+    private function retained_course_fixture(): array {
+        $generator = $this->getDataGenerator();
+        $root = $generator->create_category();
+        $category = $generator->create_category(['parent' => $root->id]);
+        $course = $generator->create_course(['category' => $category->id]);
+        $this->setAdminUser();
+        discoverability::set_state((int) $course->id, discoverability::STATE_PUBLIC);
+        category_discoverability::set_state((int) $category->id, category_discoverability::STATE_UNLISTED);
+        $delegate = $this->create_statemanager($root);
+        $publisher = $this->create_statemanager($root);
+        $this->grant($publisher, discoverability::CAPABILITY_PUBLISH, \core\context\course::instance($course->id));
+        category_discoverability::reset_caches();
+        discoverability::reset_caches();
+        return [$root, $category, $course, $delegate, $publisher];
+    }
+
+    /**
+     * The preview panel's own markup, from its opening tag to the end of the form.
+     *
+     * @param string $html The rendered form.
+     * @return string The markup from the preview on.
+     */
+    private function preview(string $html): string {
+        $start = strpos($html, 'local-unlistedcourses-preview');
+        $this->assertNotFalse($start, 'The preview was not rendered at all.');
+        return substr($html, $start);
+    }
+
+    /**
+     * An unlisted category whose listing would publish a course the delegate may not publish freezes the select.
+     *
+     * @return void
+     */
+    public function test_an_unlisted_category_freezes_the_select_for_a_delegate_who_may_not_publish_what_it_holds_back(): void {
+        $this->resetAfterTest();
+        [$root, $category, , $delegate, $publisher] = $this->retained_course_fixture();
+        $blocked = get_string('preview_relistblocked', 'local_unlistedcourses');
+
+        $this->setUser($delegate);
+        $html = $this->render($category);
+        $this->assertSame(0, preg_match('~<select[^>]*name="state"~', $html), 'A frozen control is not a select any more.');
+        $this->assertSame(
+            1,
+            preg_match('~<input[^>]*name="state"[^>]*>~', $html, $matches),
+            'The frozen value must still be submitted through a hidden input.'
+        );
+        $this->assertStringContainsString('type="hidden"', $matches[0]);
+        $this->assertStringContainsString('value="' . category_discoverability::STATE_UNLISTED . '"', $matches[0]);
+        $this->assertStringContainsString($blocked, $this->preview($html), 'The preview says who has to list it.');
+
+        // Control: somebody who may publish the course gets the same category as a live select, and no such sentence.
+        $this->setUser($publisher);
+        $html = $this->render($category);
+        $this->assertStringContainsString(
+            'selected',
+            $this->option_tag($this->select($html), category_discoverability::STATE_UNLISTED)
+        );
+        $this->assertStringNotContainsString($blocked, $this->preview($html));
+
+        // Control: the delegate on an unlisted category that holds back nothing public gets a live select.
+        $empty = $this->getDataGenerator()->create_category(['parent' => $root->id]);
+        $this->setAdminUser();
+        category_discoverability::set_state((int) $empty->id, category_discoverability::STATE_UNLISTED);
+        $this->setUser($delegate);
+        $this->option_tag($this->select($this->render($empty)), category_discoverability::STATE_DEFAULT);
+    }
+
+    /**
+     * A delegate posting "listed" past the frozen control is refused by the save, and nothing changes.
+     *
+     * The form only mirrors the rule: the persistent freeze still lets a crafted post carry any
+     * value the select offers, and the save hands it to set_state(), which decides.
+     *
+     * @return void
+     */
+    public function test_a_delegate_relisting_through_the_form_is_refused_and_a_publisher_is_not(): void {
+        $this->resetAfterTest();
+        [, $category, $course, $delegate, $publisher] = $this->retained_course_fixture();
+
+        $this->setUser($delegate);
+        $data = $this->submit($category, ['state' => category_discoverability::STATE_DEFAULT]);
+        $this->assertNotNull($data, 'Precondition: the form accepts the submission.');
+        $this->assertSame(category_discoverability::STATE_DEFAULT, (int) $data->state, 'Precondition: the posted value survives.');
+
+        $sink = $this->redirectEvents();
+        $refused = false;
+        try {
+            categorystate::save((int) $category->id, $data);
+        } catch (\required_capability_exception $e) {
+            $refused = true;
+            $this->assertSame(get_capability_string(discoverability::CAPABILITY_PUBLISH), $e->a);
+        }
+        $this->assertTrue($refused, 'The save must refuse to list the category again.');
+        $this->assertCount(0, $sink->get_events(), 'A refused save fires nothing.');
+        category_discoverability::reset_caches();
+        discoverability::reset_caches();
+        $this->assertSame(category_discoverability::STATE_UNLISTED, category_discoverability::get_state((int) $category->id));
+        $this->assertFalse(discoverability::is_public((int) $course->id));
+
+        // Control: the publisher posts the same value through the same form, and it is written.
+        $this->setUser($publisher);
+        $data = $this->submit($category, ['state' => category_discoverability::STATE_DEFAULT]);
+        $this->assertTrue(categorystate::save((int) $category->id, $data));
+        $sink->close();
+        category_discoverability::reset_caches();
+        discoverability::reset_caches();
+        $this->assertSame(category_discoverability::STATE_DEFAULT, category_discoverability::get_state((int) $category->id));
+        $this->assertTrue(discoverability::is_public((int) $course->id));
     }
 }

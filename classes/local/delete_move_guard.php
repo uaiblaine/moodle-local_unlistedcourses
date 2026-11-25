@@ -24,8 +24,10 @@
 
 namespace local_unlistedcourses\local;
 
+use local_unlistedcourses\access;
 use local_unlistedcourses\category_discoverability;
 use local_unlistedcourses\discoverability;
+use local_unlistedcourses\event\public_state_kept_after_move;
 
 /**
  * Keeps core_course_category::delete_move() from making public what was not public before it.
@@ -72,11 +74,23 @@ final class delete_move_guard {
      * Two statements over the subtree, by {course_categories}.path, plus the public predicates'
      * own reads for what they return. The category's own row is not recorded: it goes with it.
      *
+     * The predicates answer from request memos, which earlier work in the same request can have
+     * left answering for a path that has changed since (one core_course_delete_categories call
+     * deletes several categories, and a delete_move() that aborted after moving children resets
+     * nothing). A row such a memo still calls public would be dropped here as effective and never
+     * demoted, so the memos are reset first.
+     *
      * @param \core_course_category $category The category core is about to delete.
      * @return void
      */
     public static function record(\core_course_category $category): void {
         global $DB;
+
+        access::reset_caches();
+        // Only core's pseudo-category top() has no path; its bound LIKE would be '/%', every category of the site.
+        if ((string) $category->path === '') {
+            return;
+        }
 
         $categoryid = (int) $category->id;
         $below = $DB->sql_like('cc.path', ':below');
@@ -118,8 +132,10 @@ final class delete_move_guard {
      * term of a descendant's), so the order of the writes does not matter.
      *
      * A row whose lock another writer holds past the timeout is skipped: it stays public, and the
-     * skip is reported through debugging() with the row and the deleted category, so it is not lost
-     * without a trace. Nothing guarantees that the lock holder is taking it out of the public state.
+     * skip is logged on every site as {@see public_state_kept_after_move}, naming the row and the
+     * deleted category, and reported through debugging() too where developer debugging is on.
+     * Nothing guarantees that the lock holder is taking it out of the public state, and nothing
+     * retries: the holder may be a publisher deciding that very row.
      *
      * @param int $categoryid The deleted category.
      * @param bool $moved Whether core moved its contents; a deletion without a move settles nothing.
@@ -144,6 +160,7 @@ final class delete_move_guard {
                         . 'contents moved, because another writer held its lock; it kept its public state.',
                     DEBUG_NORMAL
                 );
+                self::report_kept(public_state_kept_after_move::KIND_COURSE, $courseid, $categoryid, $userid);
             }
         }
         foreach ($categories as $id) {
@@ -155,8 +172,35 @@ final class delete_move_guard {
                         . 'contents moved, because another writer held its lock; it kept its public state.',
                     DEBUG_NORMAL
                 );
+                self::report_kept(public_state_kept_after_move::KIND_CATEGORY, $id, $categoryid, $userid);
             }
         }
+    }
+
+    /**
+     * Log a public row a busy lock kept public, in the site log every site keeps.
+     *
+     * A course or category whose context is gone has been deleted since, and its state row with it:
+     * nothing was kept, and nothing is logged.
+     *
+     * @param string $kind {@see public_state_kept_after_move::KIND_COURSE} or KIND_CATEGORY.
+     * @param int $id The course or category that kept its public state.
+     * @param int $categoryid The deleted category.
+     * @param int $userid The user who deleted it.
+     * @return void
+     */
+    private static function report_kept(string $kind, int $id, int $categoryid, int $userid): void {
+        $context = $kind === public_state_kept_after_move::KIND_COURSE
+            ? \core\context\course::instance($id, IGNORE_MISSING)
+            : \core\context\coursecat::instance($id, IGNORE_MISSING);
+        if (!$context) {
+            return;
+        }
+        public_state_kept_after_move::create([
+            'context' => $context,
+            'userid' => $userid,
+            'other' => ['deletedcategoryid' => $categoryid, 'kind' => $kind],
+        ])->trigger();
     }
 
     /**

@@ -57,6 +57,9 @@ final class state_lock {
     /** @var int Seconds after which a lock left by a dead process expires, where the factory needs one. */
     public const LIFETIME = 60;
 
+    /** @var string The resource of {@see category_relist()}; no row resource can take this name. */
+    public const RELIST_RESOURCE = 'category_relist';
+
     /**
      * Take the lock on one course's state.
      *
@@ -77,6 +80,24 @@ final class state_lock {
      */
     public static function category(int $categoryid): \core\lock\lock {
         return self::acquire('category_' . $categoryid);
+    }
+
+    /**
+     * Take the one site-wide lock every category change that may leave the unlisted state is made under.
+     *
+     * Taking a category out of the unlisted state is decided on a prediction that reads the other
+     * unlisted categories on every path below it ({@see \local_unlistedcourses\category_discoverability::relist_activations()}).
+     * Two such changes of nested categories, each under its own row lock only, could each predict
+     * that the other still holds a public course back, and both write. Under this lock the second
+     * prediction runs after the first write. Taken before the row lock, and only when the state asked
+     * for is not unlisted, which is known before anything is read, so the order is always this one
+     * first and no two writers can wait on each other.
+     *
+     * @return \core\lock\lock The lock, to be released in a finally block, after the row lock.
+     * @throws state_busy_exception When another writer holds it past the timeout.
+     */
+    public static function category_relist(): \core\lock\lock {
+        return self::acquire(self::RELIST_RESOURCE);
     }
 
     /**
