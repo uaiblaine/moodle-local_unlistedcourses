@@ -4,6 +4,58 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+Version `2026042013`: the fixes of the 2026-11-25 external audit, with a new event (the bump makes
+core register it). No database changes.
+
+### Security
+
+- Taking a category out of the unlisted state (listing it again, or making it public) needs the
+  right to publish what that makes public. A course or subcategory whose own state is public stays
+  public while an unlisted category above it holds it back, and listing that category again served
+  it to visitors at once, though `local/unlistedcourses:managecategorystate` alone allowed it.
+  Now each public course and subcategory the change would bring into effect needs
+  `local/unlistedcourses:publish` (course) or `local/unlistedcourses:publishcategory` (category)
+  at its own context; one that something else still holds back (hidden, under a hidden category,
+  under another unlisted category, unlisted itself) asks nothing, and a change that makes nothing
+  public is unchanged, so the delegated capability still lists and unlists such a category alone.
+  The category page counts the public courses and subcategories listing would make public and,
+  for somebody who may not publish all of them, shows the control frozen and says that somebody
+  who may has to do it. Such changes are made one at a time across the site, so two people listing
+  nested categories at the same moment cannot each count on the other one still holding a course
+  back.
+- A category deletion with its contents moved that skips a public course or category, because
+  somebody else was changing its state for the whole five-second wait, now writes "Public
+  discoverability state kept after a category deletion" to the site log (context: the course or
+  category that kept its state), whatever the site's debugging level; it was reported only to the
+  debugging output. The guard also forgets the public answers memoised earlier in the same
+  request before it records, so a deletion of several categories in one call demotes every row it
+  should.
+- Restoring the site home's backup over the site home with "Overwrite course configuration" no
+  longer fails: the site home has no discoverability state, and the restore now skips the element
+  for it.
+- The course form's hook treats a discoverability value that names no state (empty, not a whole
+  number, or a number that is not one of the three states) as absent: a new course gets the
+  default for new courses, and an update keeps the course's state. An empty value from a caller of
+  `create_course()` or `update_course()` was read as listed, and an unknown number failed after the
+  course was created. A number with surrounding spaces still counts, as on restore.
+- A first change of a course's state that meets the row the task applying the default inserted a
+  moment before (that task takes no lock, on purpose) is refused as busy, with the usual message
+  asking to try again, instead of ending on a database error over the unique key; inside a
+  caller's database transaction the original error goes back to that caller.
+
+### Documentation
+
+- The README and the developer guide list everything that brings a held-back public state into
+  effect: listing the unlisted category again (now gated), a deletion with its contents moved
+  (taken back to listed), a plain move and showing a hidden course or category (neither observed,
+  and neither asks the publish capability). Publishing is decided at the course's current category,
+  so somebody who may publish there and move the course elsewhere can do both in one save. Both say
+  why a restorer who may publish keeps a public state from another site's backup: core's "same
+  site" mark travels in every backup the site exports, so it tells no accident apart and would
+  refuse a staging-to-production restore.
+
 ## v5.2-r5 (2026042012) - 2026-11-15
 
 Report builder data sources for the discoverability states, a deletion with its contents moved
