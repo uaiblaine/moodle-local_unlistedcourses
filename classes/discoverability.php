@@ -26,6 +26,7 @@ namespace local_unlistedcourses;
 
 use local_unlistedcourses\event\course_state_updated;
 use local_unlistedcourses\local\id_chunks;
+use local_unlistedcourses\local\state_busy_exception;
 use local_unlistedcourses\local\state_lock;
 
 /**
@@ -338,8 +339,6 @@ class discoverability {
      * @return array Map of courseid => bool, deduplicated, in the order given.
      */
     public static function are_public(array $courseids): array {
-        global $DB;
-
         $courseids = array_values(array_unique(array_map('intval', $courseids)));
         $answers = [];
         $unknown = [];
@@ -352,38 +351,8 @@ class discoverability {
         }
 
         if ($unknown) {
-            // One statement for the state of every id not already known in this request.
-            $states = self::get_states($unknown);
-            $candidates = [];
-            foreach ($unknown as $courseid) {
-                if ($states[$courseid] !== self::STATE_PUBLIC) {
-                    $answers[$courseid] = self::remember($courseid, false);
-                } else {
-                    $candidates[] = $courseid;
-                }
-            }
-
-            // One statement for the candidates' own rows: their visibility and their category.
-            $courses = $candidates
-                ? id_chunks::read(
-                    $candidates,
-                    fn(array $chunk): array => $DB->get_records_list('course', 'id', $chunk, '', 'id, category, visible')
-                )
-                : [];
-            $categories = [];
-            foreach ($candidates as $courseid) {
-                $course = $courses[$courseid] ?? null;
-                if (!$course || !$course->visible) {
-                    $answers[$courseid] = self::remember($courseid, false);
-                    continue;
-                }
-                $categories[$courseid] = (int) $course->category;
-            }
-
-            $paths = self::category_paths($categories);
-            $visible = self::path_visibility($paths);
-            foreach ($categories as $courseid => $categoryid) {
-                $answers[$courseid] = self::remember($courseid, self::path_is_public($paths[$categoryid] ?? [], $visible));
+            foreach (self::compose($unknown, null) as $courseid => $answer) {
+                $answers[$courseid] = self::remember($courseid, $answer);
             }
         }
 
@@ -392,6 +361,71 @@ class discoverability {
             $ordered[$courseid] = $answers[$courseid];
         }
         return $ordered;
+    }
+
+    /**
+     * Whether each of these courses would be public if one category were not unlisted.
+     *
+     * The composition of {@see are_public()}, with that one category read as not unlisted and
+     * nothing else changed, read from the database and memoised nowhere: the answer is about a
+     * state that is not stored. {@see category_discoverability::relist_activations()} predicts
+     * with it what taking that category out of the unlisted state would make public, with the
+     * rule that will answer once the state is written rather than a copy of it.
+     *
+     * @param array $courseids Course ids.
+     * @param int $relisted The category to read as not unlisted.
+     * @return array Map of courseid => bool, deduplicated.
+     */
+    public static function would_be_public(array $courseids, int $relisted): array {
+        $courseids = array_values(array_unique(array_map('intval', $courseids)));
+        return $courseids ? self::compose($courseids, $relisted) : [];
+    }
+
+    /**
+     * The public answer for each of these courses, read from the database, memoising nothing.
+     *
+     * @param array $courseids Course ids, deduplicated ints.
+     * @param int|null $relisted A category to read as not unlisted, null for the categories as they are.
+     * @return array Map of courseid => bool, for every id given.
+     */
+    private static function compose(array $courseids, ?int $relisted): array {
+        global $DB;
+
+        // One statement for the state of every id not already known in this request.
+        $states = self::get_states($courseids);
+        $answers = [];
+        $candidates = [];
+        foreach ($courseids as $courseid) {
+            if ($states[$courseid] !== self::STATE_PUBLIC) {
+                $answers[$courseid] = false;
+            } else {
+                $candidates[] = $courseid;
+            }
+        }
+
+        // One statement for the candidates' own rows: their visibility and their category.
+        $courses = $candidates
+            ? id_chunks::read(
+                $candidates,
+                fn(array $chunk): array => $DB->get_records_list('course', 'id', $chunk, '', 'id, category, visible')
+            )
+            : [];
+        $categories = [];
+        foreach ($candidates as $courseid) {
+            $course = $courses[$courseid] ?? null;
+            if (!$course || !$course->visible) {
+                $answers[$courseid] = false;
+                continue;
+            }
+            $categories[$courseid] = (int) $course->category;
+        }
+
+        $paths = self::category_paths($categories);
+        $visible = self::path_visibility($paths);
+        foreach ($categories as $courseid => $categoryid) {
+            $answers[$courseid] = self::path_is_public($paths[$categoryid] ?? [], $visible, $relisted);
+        }
+        return $answers;
     }
 
     /**
@@ -466,13 +500,15 @@ class discoverability {
      *
      * @param array $ids The category ids on the path, ancestor first.
      * @param array $visible Map of categoryid => record carrying visible.
+     * @param int|null $relisted A category to read as not unlisted, null for none ({@see would_be_public()}).
      * @return bool True when nothing on the path refuses it.
      */
-    private static function path_is_public(array $ids, array $visible): bool {
+    private static function path_is_public(array $ids, array $visible, ?int $relisted): bool {
         if (!$ids) {
             return false;
         }
-        if (array_intersect($ids, category_discoverability::unlisted_ids())) {
+        // Category id 0 is on no path, so without a relisted category nothing is taken out.
+        if (array_intersect(array_diff($ids, [$relisted ?? 0]), category_discoverability::unlisted_ids())) {
             return false;
         }
         foreach ($ids as $pathid) {
@@ -502,7 +538,7 @@ class discoverability {
      * @throws \required_capability_exception When the change enters or leaves the public state and the user may not
      *   publish courses here.
      * @throws \local_unlistedcourses\local\state_busy_exception When another writer of this course holds its lock past
-     *   the timeout; nothing is written.
+     *   the timeout, or wrote its first row meanwhile without the lock; nothing is written.
      */
     public static function set_state(int $courseid, int $state, ?int $userid = null): void {
         global $USER;
@@ -559,6 +595,9 @@ class discoverability {
      * that is no longer public there is left alone. The write is set_state()'s own, so
      * {@see course_state_updated} fires and every request cache is reset.
      *
+     * Internal to the plugin: public only so that {@see local\delete_move_guard} can call it, and no
+     * other caller, in this plugin or outside it, may.
+     *
      * @param int $courseid The course id.
      * @param int $userid The user who deleted the category, named in the event.
      * @return void
@@ -588,6 +627,15 @@ class discoverability {
      *
      * The caller holds the course's lock and has decided the change on the row it read under it.
      *
+     * The lock keeps out every writer that goes through this class, but not
+     * {@see local\default_backfill}, which inserts without it on purpose and relies on the unique
+     * key on courseid. Its row can land between the read under the lock and the insert here: that
+     * is somebody else's state, set meanwhile, so nothing is overwritten and the caller hears
+     * "busy", as it would for a held lock. Inside a caller's transaction the failed insert has
+     * already aborted that transaction on PostgreSQL, so the original error goes back to its owner,
+     * on every database family alike. The insert is {@see insert_row()}, called through static so
+     * that state_lock_test can play the other writer.
+     *
      * @param int $courseid The course id.
      * @param int $state The new state.
      * @param int $current The state the row held, read under the lock.
@@ -595,6 +643,8 @@ class discoverability {
      * @param int $userid The user performing the change.
      * @param \core\context\course $context The course context.
      * @return void
+     * @throws state_busy_exception When a first row was written meanwhile without the lock; nothing is written.
+     * @throws \dml_write_exception When the insert fails for any other reason, or inside a transaction.
      */
     private static function write(
         int $courseid,
@@ -614,12 +664,19 @@ class discoverability {
             $row->timemodified = time();
             $DB->update_record(self::TABLE, $row);
         } else {
-            $DB->insert_record(self::TABLE, (object) [
-                'courseid' => $courseid,
-                'state' => $state,
-                'usermodified' => $userid,
-                'timemodified' => time(),
-            ]);
+            try {
+                static::insert_row((object) [
+                    'courseid' => $courseid,
+                    'state' => $state,
+                    'usermodified' => $userid,
+                    'timemodified' => time(),
+                ]);
+            } catch (\dml_write_exception $e) {
+                if (!$DB->is_transaction_started() && $DB->record_exists(self::TABLE, ['courseid' => $courseid])) {
+                    throw new state_busy_exception();
+                }
+                throw $e;
+            }
         }
 
         // The discoverability answer for this course is a function of the state: forget it.
@@ -632,6 +689,23 @@ class discoverability {
             'userid' => $userid,
             'other' => ['oldstate' => $current, 'newstate' => $state],
         ])->trigger();
+    }
+
+    /**
+     * Insert a course's first state row.
+     *
+     * The one statement of {@see write()} a test replaces, through a subclass whose set_state() reaches it by late
+     * static binding, to play a writer that inserts first: the catch, the re-read and the busy-or-rethrow decision
+     * stay in write(). Nothing else may override it.
+     *
+     * @param \stdClass $record The row: courseid, state, usermodified and timemodified.
+     * @return int The new row's id.
+     * @throws \dml_write_exception When the database refuses the insert, a row for the course already there included.
+     */
+    protected static function insert_row(\stdClass $record): int {
+        global $DB;
+
+        return (int) $DB->insert_record(self::TABLE, $record);
     }
 
     /**

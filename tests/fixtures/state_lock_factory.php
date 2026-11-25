@@ -49,6 +49,12 @@ final class state_lock_factory implements \core\lock\lock_factory {
     /** @var callable|null Run once when the next lock is granted: a writer that finished just before. */
     public static $ongranted = null;
 
+    /** @var bool Refuse a resource granted and not yet released, as a real lock refuses another holder. */
+    public static bool $exclusive = false;
+
+    /** @var array Resources granted and not yet released, tracked while $exclusive is on. */
+    private static array $granted = [];
+
     /**
      * Forget every held resource, entry and callback.
      *
@@ -58,6 +64,8 @@ final class state_lock_factory implements \core\lock\lock_factory {
         self::$held = [];
         self::$log = [];
         self::$ongranted = null;
+        self::$exclusive = false;
+        self::$granted = [];
     }
 
     /**
@@ -104,11 +112,15 @@ final class state_lock_factory implements \core\lock\lock_factory {
      * @return \core\lock\lock|false
      */
     public function get_lock($resource, $timeout, $maxlifetime = 86400) {
-        if (in_array($resource, self::$held, true)) {
+        if (in_array($resource, self::$held, true) || (self::$exclusive && in_array($resource, self::$granted, true))) {
             self::$log[] = 'timeout:' . $resource;
             return false;
         }
         self::$log[] = 'get:' . $resource;
+        // Granted before the callback runs, so the writer it plays meets this holder.
+        if (self::$exclusive) {
+            self::$granted[] = $resource;
+        }
         if (self::$ongranted !== null) {
             $callback = self::$ongranted;
             self::$ongranted = null;
@@ -125,6 +137,7 @@ final class state_lock_factory implements \core\lock\lock_factory {
      */
     public function release_lock(\core\lock\lock $lock) {
         self::$log[] = 'release:' . $lock->get_key();
+        self::$granted = array_values(array_diff(self::$granted, [$lock->get_key()]));
         return true;
     }
 }
