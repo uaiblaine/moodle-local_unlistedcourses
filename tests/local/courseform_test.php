@@ -28,6 +28,7 @@ use local_unlistedcourses\access;
 use local_unlistedcourses\discoverability;
 use local_unlistedcourses\hook_callbacks;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Tests for the course form control and its persistence, hook wiring included.
@@ -664,5 +665,116 @@ final class courseform_test extends \advanced_testcase {
             courseform::ELEMENT => discoverability::STATE_PUBLIC,
         ]);
         $this->assertSame(discoverability::STATE_PUBLIC, discoverability::get_state((int) $course->id));
+    }
+
+    /**
+     * Element values that name no state.
+     *
+     * An int cast reads the first three as 0, listed, and the last three as a state set_state()
+     * refuses with an exception, after create_course() has inserted the course.
+     *
+     * @return array Map of case name => [the element's value].
+     */
+    public static function element_naming_no_state_provider(): array {
+        return [
+            'empty' => [''],
+            'text' => ['abc'],
+            'leading digit' => ['0abc'],
+            'unknown number' => [99],
+            'unknown numeric string' => ['99'],
+            'negative' => ['-1'],
+        ];
+    }
+
+    /**
+     * An element that names no state counts as absent: a new course gets the creation default and an update keeps the state.
+     *
+     * The creation default is unlisted, so the cast (listed) and the right answer (unlisted) differ.
+     * The control is a value that names a state, through the same two doors, changing the state.
+     *
+     * @param int|string $value The element's value.
+     * @return void
+     */
+    #[DataProvider('element_naming_no_state_provider')]
+    public function test_an_element_that_names_no_state_counts_as_absent(int|string $value): void {
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $this->setAdminUser();
+        $this->set_creation_default(discoverability::STATE_UNLISTED);
+
+        $course = create_course((object) [
+            'fullname' => 'No state named on creation',
+            'shortname' => 'nostate',
+            'category' => $category->id,
+            courseform::ELEMENT => $value,
+        ]);
+        access::reset_caches();
+        $this->assertTrue(
+            discoverability::is_unlisted((int) $course->id),
+            'A new course whose element names no state gets the creation default, not listed.'
+        );
+
+        update_course((object) ['id' => $course->id, courseform::ELEMENT => $value]);
+        access::reset_caches();
+        $this->assertTrue(discoverability::is_unlisted((int) $course->id), 'An update whose element names no state keeps it.');
+
+        // Control: a value that names a state is applied on both doors, against the default and the current state.
+        $listed = create_course((object) [
+            'fullname' => 'Listed on creation',
+            'shortname' => 'named',
+            'category' => $category->id,
+            courseform::ELEMENT => '0',
+        ]);
+        access::reset_caches();
+        $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_state((int) $listed->id));
+        update_course((object) ['id' => $course->id, courseform::ELEMENT => 0]);
+        access::reset_caches();
+        $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_state((int) $course->id));
+    }
+
+    /**
+     * Element values that name a state: the integer, its string, and the string padded with spaces.
+     *
+     * The padding is trimmed, as the restore trims the backup's value.
+     *
+     * @return array Map of case name => [the element's value].
+     */
+    public static function element_naming_a_state_provider(): array {
+        return [
+            'integer' => [1],
+            'numeric string' => ['1'],
+            'leading space' => [' 1'],
+            'trailing space' => ['1 '],
+        ];
+    }
+
+    /**
+     * An element that names a state is applied by create_course() and update_course(), as a string too.
+     *
+     * The creation default is listed here, so the unlisted course is the element's doing.
+     *
+     * @param int|string $value The element's value, naming the unlisted state.
+     * @return void
+     */
+    #[DataProvider('element_naming_a_state_provider')]
+    public function test_an_element_that_names_a_state_is_applied(int|string $value): void {
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $this->setAdminUser();
+
+        $course = create_course((object) [
+            'fullname' => 'Unlisted on creation',
+            'shortname' => 'unlistednew',
+            'category' => $category->id,
+            courseform::ELEMENT => $value,
+        ]);
+        access::reset_caches();
+        $this->assertTrue(discoverability::is_unlisted((int) $course->id));
+
+        $listed = $this->create_without_element((int) $category->id, 'listednew');
+        $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_state($listed), 'Precondition: listed.');
+        update_course((object) ['id' => $listed, courseform::ELEMENT => $value]);
+        access::reset_caches();
+        $this->assertTrue(discoverability::is_unlisted($listed));
     }
 }

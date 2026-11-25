@@ -25,6 +25,7 @@
 namespace local_unlistedcourses\output;
 
 use local_unlistedcourses\category_discoverability;
+use local_unlistedcourses\discoverability;
 use PHPUnit\Framework\Attributes\CoversClass;
 
 /**
@@ -837,5 +838,103 @@ final class category_preview_test extends \advanced_testcase {
             $failed = true;
         }
         $this->assertTrue($failed, 'The helper must fail on a fragment whose tags do not match.');
+    }
+
+    /**
+     * An unlisted category counts the public courses and subcategories listing it again would make public.
+     *
+     * Only what it alone holds back: a hidden public course and a public subcategory under a
+     * second unlisted category are not counted. A category that holds back nothing, and the same
+     * category once listed, export no warning.
+     *
+     * @return void
+     */
+    public function test_an_unlisted_category_counts_what_listing_it_again_would_make_public(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $generator = $this->getDataGenerator();
+
+        $category = $generator->create_category();
+        $context = \core\context\coursecat::instance($category->id);
+        $public = $generator->create_course(['category' => $category->id]);
+        $hidden = $generator->create_course(['category' => $category->id]);
+        $sub = $generator->create_category(['parent' => $category->id]);
+        $inner = $generator->create_category(['parent' => $category->id]);
+        $deep = $generator->create_category(['parent' => $inner->id]);
+        foreach ([$public, $hidden] as $course) {
+            discoverability::set_state((int) $course->id, discoverability::STATE_PUBLIC);
+        }
+        foreach ([$sub, $deep] as $publiccategory) {
+            category_discoverability::set_state((int) $publiccategory->id, category_discoverability::STATE_PUBLIC);
+        }
+        category_discoverability::set_state((int) $inner->id, category_discoverability::STATE_UNLISTED);
+        category_discoverability::set_state((int) $category->id, category_discoverability::STATE_UNLISTED);
+        $DB->set_field('course', 'visible', 0, ['id' => $hidden->id]);
+        discoverability::reset_caches();
+
+        $data = $this->export($category, $context);
+        $this->assertSame([1, 1], [$data['relistcourses'], $data['relistcategories']]);
+        $this->assertTrue($data['relistwarning']);
+        $this->assertFalse($data['relistblocked'], 'The administrator may publish both.');
+        $html = $this->render($data);
+        $this->assertStringContainsString(
+            get_string('preview_relist', 'local_unlistedcourses', (object) ['courses' => 1, 'categories' => 1]),
+            $html
+        );
+
+        // Control: an unlisted category holding back nothing public counts nothing and warns of nothing.
+        $empty = $generator->create_category();
+        category_discoverability::set_state((int) $empty->id, category_discoverability::STATE_UNLISTED);
+        $data = $this->export($empty, \core\context\coursecat::instance($empty->id));
+        $this->assertSame([0, 0, false], [$data['relistcourses'], $data['relistcategories'], $data['relistwarning']]);
+        $this->assertStringNotContainsString(
+            get_string('preview_relist', 'local_unlistedcourses', (object) ['courses' => 0, 'categories' => 0]),
+            $this->render($data)
+        );
+
+        // Control: the same category, listed, has nothing left to warn about.
+        category_discoverability::set_state((int) $category->id, category_discoverability::STATE_DEFAULT);
+        $data = $this->export($category, $context);
+        $this->assertSame([0, 0, false], [$data['relistcourses'], $data['relistcategories'], $data['relistwarning']]);
+    }
+
+    /**
+     * A delegate who may not publish what listing would make public is told so; a publisher is not.
+     *
+     * @return void
+     */
+    public function test_the_relist_is_blocked_for_a_delegate_and_open_to_a_publisher(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $generator = $this->getDataGenerator();
+
+        $category = $generator->create_category();
+        $context = \core\context\coursecat::instance($category->id);
+        $course = $generator->create_course(['category' => $category->id]);
+        discoverability::set_state((int) $course->id, discoverability::STATE_PUBLIC);
+        category_discoverability::set_state((int) $category->id, category_discoverability::STATE_UNLISTED);
+
+        $delegate = $generator->create_user();
+        $roleid = $generator->create_role();
+        assign_capability(category_discoverability::CAPABILITY_MANAGE, CAP_ALLOW, $roleid, $context->id, true);
+        role_assign($roleid, $delegate->id, $context->id);
+        $blocked = get_string('preview_relistblocked', 'local_unlistedcourses');
+
+        $this->setUser($delegate);
+        $data = $this->export($category, $context);
+        $this->assertSame([1, 0], [$data['relistcourses'], $data['relistcategories']], 'The count is the same for everybody.');
+        $this->assertTrue($data['relistblocked']);
+        $html = $this->render($data);
+        $this->assertStringContainsString($blocked, $html);
+        $this->assert_well_formed($html, 'The unlisted panel with its relist warning and sentence.');
+
+        // Control: the administrator, who may publish the course, sees the count and not the sentence.
+        $this->setAdminUser();
+        $data = $this->export($category, $context);
+        $this->assertSame([1, 0], [$data['relistcourses'], $data['relistcategories']]);
+        $this->assertFalse($data['relistblocked']);
+        $this->assertStringNotContainsString($blocked, $this->render($data));
     }
 }

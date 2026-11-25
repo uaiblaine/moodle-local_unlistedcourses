@@ -49,8 +49,10 @@ $capabilities = [
      * capability rather than moodle/category:manage, which carries RISK_XSS
      * and lets the holder rename, move and delete categories: a site should
      * be able to delegate "hide this programme from listings" without handing
-     * over the category tree. No risk bitmask - the act hides a listing and
-     * exposes nothing.
+     * over the category tree. No risk bitmask - hiding a listing exposes
+     * nothing, and listing it again asks the publish capabilities of whatever
+     * that would make public
+     * ({@see \local_unlistedcourses\category_discoverability::require_relist_allowed()}).
      */
     'local/unlistedcourses:managecategorystate' => [
         'captype' => 'write',

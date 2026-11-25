@@ -162,6 +162,18 @@ listings is an editing act, publishing it to the open web is not). A call that c
 nothing needs no capability. Every change fires
 `\local_unlistedcourses\event\category_state_updated`.
 
+**Listing a category again publishes nothing its lister could not publish.** A course or
+subcategory whose own state is public keeps that state while an unlisted category above it holds
+it back, and taking that category out of the unlisted state, to listed or to public, would serve it
+to visitors. So `set_state()` asks, on every transition out of unlisted,
+`local/unlistedcourses:publish` at the context of each course it would make public and
+`local/unlistedcourses:publishcategory` at the context of each such subcategory
+(`category_discoverability::relist_activations()` names them, `may_relist()` and
+`require_relist_allowed()` decide for a user). A row that something else still holds back - hidden,
+under a hidden category, under another unlisted category, not public itself - asks nothing, and a
+transition that makes nothing public asks only the manage capability, so
+`local/unlistedcourses:managecategorystate` alone still lists and unlists such a category.
+
 `is_public(int)` / `are_public(array)` answer whether a category may be served to a visitor
 who is not logged in: its own state public, its own row visible, every category on its path
 existing and visible, and no category on that path unlisted. **Ancestors need not be
@@ -209,14 +221,21 @@ restore: the refusal is written to the restore log as a warning ("The course was
 backup, but the user restoring it may not publish courses here", or, for another state, "The
 discoverability state in the backup was not applied") and the target keeps the state it had. A
 restorer who holds `local/unlistedcourses:publish` keeps the backup's public state, exactly as
-they could set it by hand. A restore that finds somebody else saving the target course's state
+they could set it by hand, from another site's backup too. Core's "same site" mark is not used to
+refuse that: it is a hash of the site's identifier, which every backup the site exports carries, so
+it cannot tell an accident from anything else, and it would refuse the ordinary restore of a course
+prepared on a staging site into production. A restore that finds somebody else saving the target course's state
 for the whole of the wait below leaves that state alone, logs a warning saying so, and restores
 the rest of the course.
 
 Every change is read, decided and written under a core lock on that course or category, so two
 people saving the same one at the same moment are served one after the other, each deciding on
-what the other wrote; a call that changes nothing takes no lock. A writer still waiting after
-five seconds is refused with a message asking them to try again, and writes nothing.
+what the other wrote; a call that changes nothing takes no lock. A category change to listed or
+public is also made one at a time across the whole site, so two people listing nested unlisted
+categories at the same moment cannot each count on the other one still holding a course back. A
+writer still waiting after five seconds is refused with a message asking them to try again, and
+writes nothing; so is the first change of a course's state that meets the row the task applying the
+default inserted a moment before, which is never overwritten.
 
 ### Defaults for new courses
 
@@ -305,7 +324,10 @@ holding `local/unlistedcourses:publishcategory`, and a category that is already 
 the control frozen with its value still submitting, so saving an unrelated change never
 un-publishes it and never fails over a value the editor did not touch. A save whose value the
 form no longer offers - the category was changed by somebody else since the page was shown -
-writes nothing and says so, rather than reading the missing value as listed. For a public category
+writes nothing and says so, rather than reading the missing value as listed. For an unlisted
+category the page also counts the public courses and subcategories that listing it again would make
+public; for somebody who may not publish all of them it shows the control frozen, with its value
+still submitting, and says that somebody who may publish them has to list it. For a public category
 the page replaces the cohort and role accounting with what a visitor will be served, and
 warns when an unlisted or hidden category on the path makes the public state inert.
 
@@ -334,7 +356,8 @@ changes no state.
 
 Three limits. A course or category whose state is still being changed by somebody else when the
 deletion finishes (the plugin waits five seconds) is skipped: it stays public, and the skip is
-written to the debugging output. On the management page there is a short interval between core
+written to the site log as "Public discoverability state kept after a category deletion", in the
+context of that course or category, whatever the site's debugging level. On the management page there is a short interval between core
 moving the courses and the category being deleted during which a moved public course is already
 served; the web service does the whole deletion in one transaction, so it has no such interval.
 And when core fails while moving the courses, the subcategories have already moved under the new
@@ -358,6 +381,27 @@ from then on. Two consequences follow, and the second one is easy to miss:
 Before moving a course or a subcategory out of an unlisted or hidden category, check its own
 discoverability and set it to listed if it should not go public. Preparing courses as public
 inside an unlisted category and moving them out to publish them works for the same reason.
+
+The right to publish a course is checked where the course is when the course form is saved. On
+that form, somebody who may publish courses in one category and move the course into another
+(`moodle/course:changecategory` there) can set it to Public and move it in the same save: the
+plugin decides before core moves the course. It ends where publishing and then moving would.
+
+Showing a hidden course or a hidden category works the same way as a move. A course or category
+whose own state is public is held back while it, or a category above it, is hidden, and it is
+served to visitors as soon as it is shown again; showing it needs only core's capability to change
+its visibility, not the capability to publish, and the plugin logs nothing (showing a category
+shows its subtree without an event for each course).
+
+Before showing a hidden course or category, check the discoverability of the course, or of the
+courses and subcategories inside the category, and set to listed what should not go public. The
+"Effect of the public state" column of the [report builder data sources](#reporting) lists every
+public state a hidden course or category holds back.
+
+So a public state that something holds back comes into effect in four ways: listing the unlisted
+category above it again, which only somebody allowed to publish it may do; a deletion of that
+category with its contents moved, which takes it back to listed instead; a move; and showing what
+was hidden. The plugin watches the first two only.
 
 ## What this plugin does not do
 
@@ -460,7 +504,7 @@ Below the first one, a button to the page that applies it to existing courses, d
 | Capability | Context | Default | What it allows |
 |---|---|---|---|
 | `local/unlistedcourses:publish` | course | manager | Making a course public, or taking it out of the public state. `RISK_SPAM` and `RISK_PERSONAL`: the published page carries author-written text to the open web and can name participants. |
-| `local/unlistedcourses:managecategorystate` | category | manager | Changing a category's state at all (listed, unlisted or public). |
+| `local/unlistedcourses:managecategorystate` | category | manager | Changing a category's state at all (listed, unlisted or public). Taking a category out of the unlisted state also needs `local/unlistedcourses:publish` on every public course, and `local/unlistedcourses:publishcategory` on every public subcategory, that the change would make public. |
 | `local/unlistedcourses:publishcategory` | category | manager | Making a category public, or taking it out of the public state, on top of the previous one. `RISK_SPAM`. |
 
 None of them is cloned from a core capability, so no upgrade back-fills them. Moving a course
@@ -480,8 +524,9 @@ state returns to listed, when the course is deleted (an observer of
 `\core\event\course_deleted`) or when the category is deleted, and both tables are dropped when
 the plugin is uninstalled. A course backup carries the course's state and nothing about who set
 it. The two settings above are site configuration. Each state change fires an event
-(`course_state_updated`, `category_state_updated`), which the site's log stores keep under their
-own retention and privacy rules. The plugin stores no files and no user preferences.
+(`course_state_updated`, `category_state_updated`), and a public state a category deletion could
+not take back to listed fires `public_state_kept_after_move`; the site's log stores keep them under
+their own retention and privacy rules. The plugin stores no files and no user preferences.
 
 The report builder data sources described under [Reporting](#reporting) read both tables and
 store nothing.
