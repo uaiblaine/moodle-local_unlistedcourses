@@ -720,4 +720,43 @@ final class backup_restore_test extends \advanced_testcase {
         $new = $this->restore_as_new_by($backupid, $course, (int) get_admin()->id, 'malformed');
         $this->assertTrue(discoverability::is_unlisted($new), 'A malformed value must not be applied as listed.');
     }
+
+    /**
+     * A restore over the site home that overwrites its configuration finishes and gives it no state.
+     *
+     * The site course's own backup carries the element like every other course's, and core restores
+     * a site backup only over the site course (restore_prechecks_helper refuses it anywhere else, and
+     * any other backup over the site course). The site course has no state, so set_state() refuses
+     * it: the restore must skip the element before asking. Both the value the backup really carries
+     * and an unlisted one are restored, so the absence of a row is not just the listed value applied.
+     * The control is the same element over an ordinary course, where it is applied.
+     *
+     * @return void
+     */
+    public function test_a_restore_over_the_site_home_finishes_and_gives_it_no_state(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $adminid = (int) get_admin()->id;
+        $site = get_site();
+
+        $backupid = $this->backup_with_state_value($site, discoverability::STATE_DEFAULT, discoverability::STATE_DEFAULT);
+        $this->restore_backup($backupid, (int) SITEID, $adminid, \backup::TARGET_CURRENT_ADDING, true);
+        $this->assertFalse($DB->record_exists(discoverability::TABLE, ['courseid' => SITEID]));
+
+        $backupid = $this->backup_with_state_value($site, discoverability::STATE_DEFAULT, discoverability::STATE_UNLISTED);
+        $this->restore_backup($backupid, (int) SITEID, $adminid, \backup::TARGET_CURRENT_ADDING, true);
+        $this->assertFalse($DB->record_exists(discoverability::TABLE, ['courseid' => SITEID]), 'The site course has no state.');
+        $this->assertSame(discoverability::STATE_DEFAULT, discoverability::get_state((int) SITEID));
+
+        // Control: the same element over an ordinary course with its configuration overwritten is applied.
+        $generator = $this->getDataGenerator();
+        $source = $generator->create_course();
+        $target = $generator->create_course(['category' => $source->category]);
+        discoverability::set_state((int) $source->id, discoverability::STATE_UNLISTED);
+        $this->restore_over($source, (int) $target->id, $adminid, true);
+        $this->assertTrue(discoverability::is_unlisted((int) $target->id));
+        $this->assertTrue($DB->record_exists(discoverability::TABLE, ['courseid' => $target->id]));
+    }
 }

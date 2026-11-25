@@ -66,7 +66,12 @@ use local_unlistedcourses\local\state_lock;
  * checks the manage capability too, only so that nobody is shown a form their
  * save will refuse. Every real transition is gated, in both directions: unlike
  * the course side, where four writers already sit behind moodle/course:update,
- * this state has one writer and the gate costs nothing. One exception:
+ * this state has one writer and the gate costs nothing. Leaving the unlisted
+ * state asks more: every course and category below that is stored public and
+ * held back only by this category goes public with that write, so each of them
+ * needs the capability that publishes it, at its own context
+ * ({@see require_relist_allowed()}); the manage capability alone lists and
+ * unlists freely only what makes nothing public. One exception:
  * unpublish_after_move() takes a public row back to listed with no capability asked, a
  * restriction reachable only from {@see local\delete_move_guard}.
  *
@@ -279,8 +284,6 @@ class category_discoverability {
      * @return array Map of categoryid => bool, deduplicated, in the order given.
      */
     public static function are_public(array $categoryids): array {
-        global $DB;
-
         $categoryids = array_values(array_unique(array_map('intval', $categoryids)));
         $answers = [];
         $unknown = [];
@@ -293,33 +296,7 @@ class category_discoverability {
         }
 
         if ($unknown) {
-            // One statement for the state of every id not already known in this request.
-            $states = self::get_states($unknown);
-            $candidates = [];
-            foreach ($unknown as $categoryid) {
-                if ($states[$categoryid] !== self::STATE_PUBLIC) {
-                    $answers[$categoryid] = self::remember($categoryid, false);
-                } else {
-                    $candidates[] = $categoryid;
-                }
-            }
-
-            /* One statement for the candidates' own rows, and one for the visibility of
-               every ancestor they name between them. */
-            $rows = $candidates
-                ? id_chunks::read(
-                    $candidates,
-                    fn(array $chunk): array => $DB->get_records_list('course_categories', 'id', $chunk, '', 'id, path, visible')
-                )
-                : [];
-            $visible = self::ancestor_visibility($candidates, $rows);
-
-            foreach ($candidates as $categoryid) {
-                $row = $rows[$categoryid] ?? null;
-                /* Three terms, kept apart because each is a rule of its own: the category
-                   is really there, its own row is visible, and the path above it admits it. */
-                $answer = $row !== null && (bool) $row->visible
-                    && self::path_admits($categoryid, (string) $row->path, $visible);
+            foreach (self::compose($unknown, null) as $categoryid => $answer) {
                 $answers[$categoryid] = self::remember($categoryid, $answer);
             }
         }
@@ -329,6 +306,54 @@ class category_discoverability {
             $ordered[$categoryid] = $answers[$categoryid];
         }
         return $ordered;
+    }
+
+    /**
+     * The public answer for each of these categories, read from the database, memoising nothing.
+     *
+     * The composition {@see are_public()} documents, for ids it does not hold yet. With a category
+     * named in $relisted, that one category is read as if it were not unlisted, and nothing else
+     * changes: this is how {@see relist_activations()} predicts what leaving the unlisted state
+     * makes public, with the very rule that will answer once the state is written, not a copy of it.
+     *
+     * @param array $categoryids Category ids, deduplicated ints.
+     * @param int|null $relisted A category to read as not unlisted, null for the categories as they are.
+     * @return array Map of categoryid => bool, for every id given.
+     */
+    private static function compose(array $categoryids, ?int $relisted): array {
+        global $DB;
+
+        // One statement for the state of every id not already known in this request.
+        $states = self::get_states($categoryids);
+        $answers = [];
+        $candidates = [];
+        foreach ($categoryids as $categoryid) {
+            if ($states[$categoryid] !== self::STATE_PUBLIC) {
+                $answers[$categoryid] = false;
+            } else {
+                $candidates[] = $categoryid;
+            }
+        }
+
+        /* One statement for the candidates' own rows, and one for the visibility of
+           every ancestor they name between them. */
+        $rows = $candidates
+            ? id_chunks::read(
+                $candidates,
+                fn(array $chunk): array => $DB->get_records_list('course_categories', 'id', $chunk, '', 'id, path, visible')
+            )
+            : [];
+        $visible = self::ancestor_visibility($candidates, $rows);
+
+        foreach ($candidates as $categoryid) {
+            $row = $rows[$categoryid] ?? null;
+            /* Three terms, kept apart because each is a rule of its own: the category
+               is really there, its own row is visible, and the path above it admits it. */
+            $answer = $row !== null && (bool) $row->visible
+                && self::path_admits($categoryid, (string) $row->path, $visible, $relisted);
+            $answers[$categoryid] = $answer;
+        }
+        return $answers;
     }
 
     /**
@@ -388,12 +413,14 @@ class category_discoverability {
      * @param int $categoryid The category the path belongs to.
      * @param string $path Its stored path.
      * @param array $visible Map of categoryid => record carrying visible, as read for the ancestors.
+     * @param int|null $relisted An ancestor to read as not unlisted, null for none ({@see compose()}).
      * @return bool True when nothing above the category refuses it.
      */
-    private static function path_admits(int $categoryid, string $path, array $visible): bool {
+    private static function path_admits(int $categoryid, string $path, array $visible, ?int $relisted): bool {
         $ancestors = array_values(array_diff(self::path_ids($path), [$categoryid]));
 
-        if (array_intersect($ancestors, self::unlisted_ids())) {
+        // Category id 0 is on no path, so without a relisted category nothing is taken out.
+        if (array_intersect(array_diff($ancestors, [$relisted ?? 0]), self::unlisted_ids())) {
             return false;
         }
         foreach ($ancestors as $ancestorid) {
@@ -417,23 +444,29 @@ class category_discoverability {
     /**
      * Set the state of a category.
      *
-     * The capability boundary: the manage capability on every change, and the
+     * The capability boundary: the manage capability on every change, the
      * publish capability as well on a change that enters or leaves the public
-     * state - see the class docblock. A call that does not change the state
+     * state - see the class docblock - and, on a change that leaves the unlisted
+     * state, the capability that publishes each row it would make public
+     * ({@see require_relist_allowed()}). A call that does not change the state
      * returns without checking anything, without a lock, and fires nothing. A
      * change is read again, decided and written under the category's lock
      * ({@see local\state_lock}), so two writers never decide on the same stale
-     * row. Every change fires {@see category_state_updated}.
+     * row; a change to any state but unlisted is also made under the one site-wide
+     * lock ({@see local\state_lock::category_relist()}), taken first, so two
+     * predictions over nested categories never interleave. Every change fires
+     * {@see category_state_updated}.
      *
      * @param int $categoryid The category id. Not the top level, which has no row to hold a state.
      * @param int $state One of the state constants.
      * @param int|null $userid The user performing the change, null for the current user.
      * @return void
      * @throws \coding_exception On an unknown state or the top level.
-     * @throws \required_capability_exception When the user may not manage the state of this category, or when the
-     *   change enters or leaves the public state and the user may not publish categories here.
-     * @throws \local_unlistedcourses\local\state_busy_exception When another writer of this category holds its lock past
-     *   the timeout; nothing is written.
+     * @throws \required_capability_exception When the user may not manage the state of this category, when the
+     *   change enters or leaves the public state and the user may not publish categories here, or when the change
+     *   leaves the unlisted state and the user may not publish a course or category it would make public.
+     * @throws \local_unlistedcourses\local\state_busy_exception When another writer of this category holds its lock, or
+     *   another change to a state other than unlisted holds the site-wide one, past the timeout; nothing is written.
      */
     public static function set_state(int $categoryid, int $state, ?int $userid = null): void {
         global $USER;
@@ -455,7 +488,17 @@ class category_discoverability {
             return;
         }
 
-        $lock = state_lock::category($categoryid);
+        /* A change to anything but unlisted may leave the unlisted state, whose decision reads
+           other categories' rows: every such change runs one at a time under the site-wide lock,
+           taken first, so a second prediction reads the first one's write. A change to unlisted
+           makes nothing public and takes only the row lock. */
+        $sharedlock = $state === self::STATE_UNLISTED ? null : state_lock::category_relist();
+        try {
+            $lock = state_lock::category($categoryid);
+        } catch (\Throwable $e) {
+            $sharedlock?->release();
+            throw $e;
+        }
         try {
             // Read again under the lock: both capability decisions and the write are about this row.
             [$row, $current] = self::read_row($categoryid);
@@ -473,10 +516,167 @@ class category_discoverability {
                 require_capability(self::CAPABILITY_PUBLISH, $context, $userid);
             }
 
+            /* Leaving the unlisted state is a third decision when it makes public what this
+               category held back: each such row goes public by this write, so each asks the
+               capability that publishes it, at its own context. The prediction reads the rows
+               again rather than a memo taken earlier in the request, which may predate them. */
+            if ($current === self::STATE_UNLISTED) {
+                self::reset_caches();
+                discoverability::reset_caches();
+                self::require_relist_allowed($categoryid, $userid);
+            }
+
             self::write($categoryid, $state, $current, $row, $userid, $context);
         } finally {
+            // Reverse order of acquisition: the row lock, then the shared one.
             $lock->release();
+            $sharedlock?->release();
         }
+    }
+
+    /**
+     * The public courses and categories below this one that taking it out of the unlisted state would make public.
+     *
+     * Every course and category below it (a course in it too) whose own row is stored, asked of
+     * the public composition with this one category read as not unlisted and everything else as
+     * it is: {@see discoverability::would_be_public()} and {@see compose()}. A row still held back
+     * by something else - hidden itself, under a hidden category, under another unlisted category
+     * above or below this one, unlisted or listed itself - is not named. While this category is
+     * unlisted nothing below it is public, because it is on every one of their paths, so the
+     * rows named are exactly those the transition turns from not public into public; the state
+     * the category leaves for, listed or public, makes no difference to them.
+     *
+     * The answer is about the rows, not about a viewer: the preview counts it for everybody, and
+     * {@see may_relist()} and {@see require_relist_allowed()} decide it for one user. Asked of a
+     * category whose own row is not unlisted, it names nothing.
+     *
+     * The same statements whatever the number of rows: the path, one statement per kind of row
+     * with their contexts preloaded, so asking a capability of each of them reads no context, and
+     * the two compositions' own reads.
+     *
+     * @param int $categoryid The category id.
+     * @return array ['courses' => int[], 'categories' => int[]], each ascending.
+     */
+    public static function relist_activations(int $categoryid): array {
+        global $DB;
+
+        $none = ['courses' => [], 'categories' => []];
+        if (self::get_state($categoryid) !== self::STATE_UNLISTED) {
+            return $none;
+        }
+        $path = $DB->get_field('course_categories', 'path', ['id' => $categoryid]);
+        if ($path === false) {
+            return $none;
+        }
+
+        /* Every stored row below, public or not: the composition decides which of them is public,
+           so the prediction is its answer and not a second copy of its state term. LEFT JOIN on
+           the context, so a row whose context is missing is still asked about. */
+        $ctxfields = \core\context_helper::get_preload_record_columns_sql('ctx');
+        $below = $DB->sql_like('cc.path', ':below');
+        $courses = $DB->get_records_sql(
+            "SELECT s.courseid, {$ctxfields}
+               FROM {" . discoverability::TABLE . "} s
+               JOIN {course} c ON c.id = s.courseid
+               JOIN {course_categories} cc ON cc.id = c.category
+          LEFT JOIN {context} ctx ON ctx.instanceid = c.id AND ctx.contextlevel = :courselevel
+              WHERE cc.id = :categoryid OR {$below}",
+            ['courselevel' => CONTEXT_COURSE, 'categoryid' => $categoryid, 'below' => $path . '/%']
+        );
+        $categories = $DB->get_records_sql(
+            "SELECT s.categoryid, {$ctxfields}
+               FROM {" . self::TABLE . "} s
+               JOIN {course_categories} cc ON cc.id = s.categoryid
+          LEFT JOIN {context} ctx ON ctx.instanceid = cc.id AND ctx.contextlevel = :categorylevel
+              WHERE {$below}",
+            ['categorylevel' => CONTEXT_COURSECAT, 'below' => $path . '/%']
+        );
+        foreach (array_merge(array_values($courses), array_values($categories)) as $record) {
+            \core\context_helper::preload_from_record($record);
+        }
+
+        $courseids = array_map('intval', array_keys($courses));
+        $categoryids = array_map('intval', array_keys($categories));
+        return [
+            'courses' => self::true_ids(discoverability::would_be_public($courseids, $categoryid)),
+            'categories' => self::true_ids($categoryids ? self::compose($categoryids, $categoryid) : []),
+        ];
+    }
+
+    /**
+     * Whether a user may take this category out of the unlisted state, as far as what it would make public goes.
+     *
+     * The non-throwing twin of {@see require_relist_allowed()}, for the form and its preview, which
+     * mirror the decision set_state() takes. Only the rows the transition makes public are asked
+     * about here; the manage capability, and the publish one when the category itself enters the
+     * public state, are set_state()'s own checks and are not repeated.
+     *
+     * @param int $categoryid The category id.
+     * @param int $userid The user.
+     * @param array|null $activations What {@see relist_activations()} returned for this category, when the caller
+     *   holds it already; null to read it.
+     * @return bool True when the user may publish every row that would become public, or there is none.
+     */
+    public static function may_relist(int $categoryid, int $userid, ?array $activations = null): bool {
+        return self::relist_refusal($activations ?? self::relist_activations($categoryid), $userid) === null;
+    }
+
+    /**
+     * Refuse a user who may not publish everything that taking this category out of the unlisted state makes public.
+     *
+     * The rule set_state() applies on every transition out of the unlisted state, before anything
+     * is written: each course {@see relist_activations()} names needs
+     * {@see discoverability::CAPABILITY_PUBLISH} in that course's own context, and each category
+     * it names needs {@see CAPABILITY_PUBLISH} in that category's own context. The capability is
+     * asked of the row that goes public, not of this category: a role here reaches the rows below
+     * through the context tree as any role does, and an override at a row is respected.
+     *
+     * @param int $categoryid The category id.
+     * @param int $userid The user.
+     * @return void
+     * @throws \required_capability_exception Naming the first row the user may not publish, and its capability.
+     */
+    public static function require_relist_allowed(int $categoryid, int $userid): void {
+        $refusal = self::relist_refusal(self::relist_activations($categoryid), $userid);
+        if ($refusal !== null) {
+            [$capability, $context] = $refusal;
+            throw new \required_capability_exception($context, $capability, 'nopermissions', '');
+        }
+    }
+
+    /**
+     * The first row of a relist prediction the user may not publish, with the capability it needs.
+     *
+     * @param array $activations What {@see relist_activations()} returned.
+     * @param int $userid The user.
+     * @return array|null [capability, context] of the first refused row, null when every row may be published.
+     */
+    private static function relist_refusal(array $activations, int $userid): ?array {
+        foreach ($activations['courses'] as $courseid) {
+            $context = \core\context\course::instance($courseid);
+            if (!has_capability(discoverability::CAPABILITY_PUBLISH, $context, $userid)) {
+                return [discoverability::CAPABILITY_PUBLISH, $context];
+            }
+        }
+        foreach ($activations['categories'] as $id) {
+            $context = \core\context\coursecat::instance($id);
+            if (!has_capability(self::CAPABILITY_PUBLISH, $context, $userid)) {
+                return [self::CAPABILITY_PUBLISH, $context];
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The ids a public composition answered true for, ascending.
+     *
+     * @param array $answers Map of id => bool.
+     * @return int[] The ids.
+     */
+    private static function true_ids(array $answers): array {
+        $ids = array_map('intval', array_keys(array_filter($answers)));
+        sort($ids);
+        return $ids;
     }
 
     /**
@@ -495,6 +695,8 @@ class category_discoverability {
      * The row is read again under the category's lock, as {@see set_state()} reads it, and a
      * category that is no longer public there is left alone. The write is set_state()'s own, so
      * {@see category_state_updated} fires and every request cache is reset.
+     *
+     * Internal: no other caller may use it, inside this plugin or out of it.
      *
      * @param int $categoryid The category id.
      * @param int $userid The user who deleted the category above it, named in the event.
