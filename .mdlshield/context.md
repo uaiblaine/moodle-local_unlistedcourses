@@ -17,8 +17,19 @@ for a non-default state, each recording `usermodified`.
   so no upgrade back-fills them from an existing one. `local/unlistedcourses:publish` (course
   context, `RISK_SPAM | RISK_PERSONAL`) enters or leaves the public state of a course.
   `local/unlistedcourses:managecategorystate` (category context, no risk bitmask) sets any
-  category state. `local/unlistedcourses:publishcategory` (category context, `RISK_SPAM`)
-  enters or leaves the public state of a category.
+  category state; it exists so a site can delegate "hide this programme from listings" without
+  `moodle/category:manage`. `local/unlistedcourses:publishcategory` (category context,
+  `RISK_SPAM`) enters or leaves the public state of a category.
+- The delegation stops where listing would publish. A course or subcategory whose own state is
+  public is held back, row intact, while an unlisted category is above it. Every transition out of
+  unlisted (to listed or public) runs the relist check in `category_discoverability::set_state()`:
+  `relist_activations()` predicts, by the same composition as `are_public()` and read again under
+  the locks, the stored rows below that would become effectively public, and
+  `require_relist_allowed()` asks `publish` at each such course's context and `publishcategory` at
+  each such category's context. A transition that makes nothing public asks only the manage
+  capability. Every category transition to a state other than unlisted runs under one site-wide
+  lock taken before the row lock, so two relists of nested categories cannot both predict that the
+  other still holds a course back. The form's freeze and the preview's counts mirror the check (UX).
 - Setting a course to or from unlisted needs no capability of its own in `set_state()`: restore
   carries it the way core carries `visible`. The course form's hook (`courseform::save()`) ignores
   the element from a user who does not hold, or will not receive as creator,
@@ -54,10 +65,16 @@ for a non-default state, each recording `usermodified`.
   because core dispatches the hook from `create_course()` and `update_course()`). One observer,
   `\core\event\course_deleted`, drops the course's row: on 5.3 a course may be deleted
   asynchronously, and the event fires when the deletion really happens, at cron time, where a
-  request-time hook would run once too early. `lib.php` also cleans a category's row on core's category delete
-  and delete-move callbacks. Two events, `course_state_updated` and `category_state_updated`.
+  request-time hook would run once too early. A second observer, `\core\event\course_category_deleted`,
+  drops a category's row and, after a deletion with its contents moved, takes back to listed the
+  public rows the move made effective (`local\delete_move_guard`); `lib.php`'s
+  `pre_course_category_delete_move` callback only records them. Three events:
+  `course_state_updated` and `category_state_updated` (writes), and
+  `public_state_kept_after_move` (a read with no object, in the context of a course or category
+  the deletion guard skipped because its lock was busy, `other`: `deletedcategoryid`, `kind`).
 - Course backup carries the state for every course; restore writes it through `set_state()`
-  with the restoring user. Categories have no backup in core, so none here.
+  with the restoring user, and skips the element for the site course, which has no state.
+  Categories have no backup in core, so none here.
 - Privacy provider: full (metadata, request, userlist). A deletion request detaches the user
   from `usermodified` and keeps the row, because deleting it would un-hide or un-publish
   something as a side effect of a person leaving.
@@ -68,9 +85,31 @@ for a non-default state, each recording `usermodified`.
   The form is one of four writers; a check in the form would be routed around by the others.
   A call that changes nothing needs no capability, which lets the form re-submit a frozen
   "public" value for an editor who may not publish. The same holds for the category class,
-  where the manage capability is also checked on every real transition.
+  where the manage capability is also checked on every real transition, and the relist check on
+  every transition out of unlisted.
 - **Restore never clamps; it calls `set_state()` with the task's user.** A restorer who may not
   publish is refused inside the gate, the refusal is logged, and the target keeps its state.
+- **A foreign backup's public state follows the restorer's `publish`.** A restorer who holds it
+  keeps the backup's public state, from another site too. Core's same-site mark
+  (`backup_is_samesite()`) is not used to refuse it: it is the hash of the site identifier, carried
+  by every backup the site exports (`wwwroot` as fallback), so it tells an accident from nothing and
+  would refuse a staging-to-production restore.
+- **Moves and un-hiding are not observed.** A public row held back by an unlisted or hidden
+  category, or by its own `visible = 0`, comes into effect when a move (outside a deletion) takes it
+  under a path that serves it, or when the course or a category above it is shown; neither asks
+  `publish`, and the plugin fires nothing. `publish` is asked at the course's current category, so a
+  form save that sets Public and changes the category in one go ends where publishing then moving
+  would. Documented in the README and the developer guide; only the relist and the deletion with a
+  move are guarded.
+- **A busy lock is not a retry.** A state write that waits five seconds for another writer throws
+  `state_busy_exception` and writes nothing; the deletion guard skips such a row and logs
+  `public_state_kept_after_move`. A first course insert that meets the row the default backfill
+  inserted meanwhile (the backfill takes no lock, by design, and relies on the unique key) is
+  refused as busy when that row is there, and rethrown as the database's error otherwise or inside
+  an open transaction.
+- **`unpublish_after_move()` on both state classes asks no capability.** It only takes a public
+  row to listed, re-reads under the lock, and is called from `delete_move_guard` alone (its
+  docblock says so in prose; an `@internal` tag would trip moodle-cs).
 - **Unlisting is a listing rule, not a permission.** An unlisted course stays `visible` and
   works through a direct link; course web services, the mobile app, navigation blocks and the
   report builder name courses by their own routes. Do not read that as a leak in this plugin.
