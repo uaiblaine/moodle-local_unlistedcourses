@@ -1401,6 +1401,304 @@ final class access_test extends \advanced_testcase {
     }
 
     /**
+     * Assert what every public entry answers the current user about one course, each as a fresh request would.
+     *
+     * The single question ({@see access::is_course_discoverable()}), the batch one
+     * ({@see access::are_courses_discoverable()}) and the listing filter
+     * ({@see access::filter_courses()}), with the memos dropped before each, so no entry answers
+     * from the memo another one wrote.
+     *
+     * @param bool $expected Whether the course must be named to the current user.
+     * @param \stdClass $course The course.
+     * @param string $message What the assertion is about.
+     * @return void
+     */
+    private function assert_named(bool $expected, \stdClass $course, string $message): void {
+        $courseid = (int) $course->id;
+        access::reset_caches();
+        $this->assertSame($expected, access::is_course_discoverable($courseid), "{$message} (is_course_discoverable)");
+        access::reset_caches();
+        $this->assertSame(
+            [$courseid => $expected],
+            access::are_courses_discoverable([$courseid]),
+            "{$message} (are_courses_discoverable)"
+        );
+        access::reset_caches();
+        $items = ['c' => (object) ['id' => $courseid, 'category' => (int) $course->category]];
+        $this->assertSame($expected ? ['c'] : [], array_keys(access::filter_courses($items)), "{$message} (filter_courses)");
+        access::reset_caches();
+    }
+
+    /**
+     * An editing teacher of the course, enrolled through the manual instance, and the id of that enrolment.
+     *
+     * @param \stdClass $course The course.
+     * @return array [the user, the user_enrolments id]
+     */
+    private function enrol_teacher(\stdClass $course): array {
+        global $DB;
+
+        $teacher = $this->getDataGenerator()->create_user();
+        $this->getDataGenerator()->enrol_user($teacher->id, $course->id, 'editingteacher');
+        $ueid = (int) $DB->get_field_sql(
+            "SELECT ue.id
+               FROM {user_enrolments} ue
+               JOIN {enrol} e ON e.id = ue.enrolid
+              WHERE ue.userid = :userid AND e.courseid = :courseid AND e.enrol = :enrol",
+            ['userid' => $teacher->id, 'courseid' => $course->id, 'enrol' => 'manual'],
+            MUST_EXIST
+        );
+        return [$teacher, $ueid];
+    }
+
+    /**
+     * The two ways a teacher's own enrolment lapses, and the write that undoes each.
+     *
+     * @return array Name => [field, value that lapses it, value that restores it, relationship it gives].
+     */
+    private static function lapses(): array {
+        return [
+            'suspended' => ['status', ENROL_USER_SUSPENDED, ENROL_USER_ACTIVE, access::RELATIONSHIP_SUSPENDED],
+            'ended' => ['timeend', time() - DAYSECS, 0, access::RELATIONSHIP_EXPIRED],
+        ];
+    }
+
+    /**
+     * A teacher whose own enrolment is suspended or has ended is no longer named an unlisted course.
+     *
+     * Core keeps the role assignment the enrolment gave, so moodle/course:viewhiddencourses still
+     * answers true for them: each case asserts that first, so the test cannot pass for a reader core
+     * already refuses. The course offers them no way in (a self enrolment instance gated on a
+     * cohort nobody is in), so the refusal is the staff term's. The control is the same teacher
+     * with the same enrolment made active again, named the course by every entry.
+     *
+     * @return void
+     */
+    public function test_a_teacher_whose_own_enrolment_has_lapsed_is_not_named_an_unlisted_course(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $course = $generator->create_course();
+        $this->add_self_enrol($course, (int) $generator->create_cohort()->id);
+        $this->set_unlisted((int) $course->id, true);
+        $context = \core\context\course::instance($course->id);
+
+        foreach (self::lapses() as $how => [$field, $lapsed, $restored, $relationship]) {
+            [$teacher, $ueid] = $this->enrol_teacher($course);
+            $DB->set_field('user_enrolments', $field, $lapsed, ['id' => $ueid]);
+
+            $this->setUser($teacher);
+            access::reset_caches();
+            $this->assertTrue(
+                has_capability('moodle/course:viewhiddencourses', $context),
+                "Precondition: core still grants the {$how} teacher the capability through the role left behind."
+            );
+            $this->assertSame($relationship, access::get_enrolment_state((int) $course->id)['type']);
+            $this->assert_named(false, $course, "A teacher whose enrolment is {$how} is not named the unlisted course");
+
+            // Control: the same enrolment made active again names the course to the same teacher.
+            $DB->set_field('user_enrolments', $field, $restored, ['id' => $ueid]);
+            $this->setUser($teacher);
+            $this->assert_named(true, $course, "Control: the {$how} teacher's enrolment restored");
+        }
+    }
+
+    /**
+     * A teacher whose only enrolment is on a disabled method is not named an unlisted course.
+     *
+     * classify_enrolment() reads that row as none, the word it uses for no row at all, so the test
+     * first pins both facts that tell the two apart: core still finds the row
+     * (is_enrolled(..., false)) and refuses it as access (is_enrolled(..., true)), and the role it
+     * gave still grants the capability. A role with no row stays staff
+     * (access_probe_test::test_a_teacher_keeps_their_own_unlisted_course_only). The control is
+     * the same teacher once the method is enabled again.
+     *
+     * @return void
+     */
+    public function test_a_teacher_whose_only_enrolment_is_on_a_disabled_method_is_not_named_an_unlisted_course(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $course = $generator->create_course();
+        $this->add_self_enrol($course, (int) $generator->create_cohort()->id);
+        $this->set_unlisted((int) $course->id, true);
+        $context = \core\context\course::instance($course->id);
+        [$teacher] = $this->enrol_teacher($course);
+        $manual = $DB->get_record('enrol', ['courseid' => $course->id, 'enrol' => 'manual'], '*', MUST_EXIST);
+        $DB->set_field('enrol', 'status', ENROL_INSTANCE_DISABLED, ['id' => $manual->id]);
+
+        $this->setUser($teacher);
+        access::reset_caches();
+        $this->assertTrue(
+            has_capability('moodle/course:viewhiddencourses', $context),
+            'Precondition: core still grants the teacher the capability through the role the row gave.'
+        );
+        $this->assertSame(access::RELATIONSHIP_NONE, access::get_enrolment_state((int) $course->id)['type']);
+        $this->assertTrue(is_enrolled($context, $teacher, '', false), 'Precondition: core still finds the row.');
+        $this->assertFalse(is_enrolled($context, $teacher, '', true), 'Precondition: and refuses it as access.');
+        $this->setUser($teacher);
+        $this->assert_named(false, $course, 'A teacher whose only enrolment is on a disabled method is not named the course');
+
+        // Control: the same teacher once the method is enabled again.
+        $DB->set_field('enrol', 'status', ENROL_INSTANCE_ENABLED, ['id' => $manual->id]);
+        $this->setUser($teacher);
+        $this->assert_named(true, $course, 'Control: the method enabled again');
+    }
+
+    /**
+     * A teacher whose own enrolment has lapsed loses a course of an unlisted category in listings, and only there.
+     *
+     * The course is listed and its category unlisted, so only the relationship escape of
+     * filter_courses() could keep it: staff no longer does for this teacher. The course's own
+     * answer stays true, because the category term is a listing rule. The control is the same
+     * teacher with the enrolment active again.
+     *
+     * @return void
+     */
+    public function test_a_teacher_whose_own_enrolment_has_lapsed_loses_a_course_in_an_unlisted_category_in_listings(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $category = $generator->create_category();
+        $course = $generator->create_course(['category' => $category->id]);
+        $this->set_category_unlisted((int) $category->id, true);
+        $context = \core\context\course::instance($course->id);
+        $items = [(object) ['id' => (int) $course->id, 'category' => (int) $category->id]];
+
+        foreach (self::lapses() as $how => [$field, $lapsed, $restored]) {
+            [$teacher, $ueid] = $this->enrol_teacher($course);
+            $DB->set_field('user_enrolments', $field, $lapsed, ['id' => $ueid]);
+
+            $this->setUser($teacher);
+            access::reset_caches();
+            $this->assertTrue(
+                has_capability('moodle/course:viewhiddencourses', $context),
+                "Precondition: core still grants the {$how} teacher the capability through the role left behind."
+            );
+            $this->assertCount(0, access::filter_courses($items), "The {$how} teacher loses the course in listings.");
+            access::reset_caches();
+            $this->assertTrue(
+                access::is_course_discoverable((int) $course->id),
+                'The category term is a listing rule: the course\'s own answer is unchanged.'
+            );
+
+            // Control: the same enrolment made active again keeps the course in the same listing.
+            $DB->set_field('user_enrolments', $field, $restored, ['id' => $ueid]);
+            $this->setUser($teacher);
+            access::reset_caches();
+            $this->assertCount(1, access::filter_courses($items), "Control: the {$how} teacher's enrolment restored.");
+        }
+    }
+
+    /**
+     * Staff whose standing does not hang on a lapsed enrolment of theirs keep an unlisted course.
+     *
+     * Each viewer holds moodle/course:viewhiddencourses in the course, asserted first, and the
+     * relationship their own rows give is asserted too, so a case cannot pass on a fixture other
+     * than the one it names: the capability from a category role with a suspended enrolment in the
+     * course, moodle/course:view (a manager) with a suspended enrolment, a suspended and an active
+     * enrolment together, a role in the course with no enrolment at all, and an enrolment that is
+     * scheduled, pending or on a waiting list. The pending and waiting rows are written straight to
+     * the tables, on an enrol_apply instance, as the pending-application tests above do. The force
+     * is on: a suspended editing teacher of the same course, in the same run, is refused.
+     *
+     * @return void
+     */
+    public function test_staff_whose_standing_does_not_hang_on_a_lapsed_enrolment_keep_an_unlisted_course(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $course = $generator->create_course();
+        $self = $this->add_self_enrol($course, (int) $generator->create_cohort()->id);
+        $this->set_unlisted((int) $course->id, true);
+        $context = \core\context\course::instance($course->id);
+        $editingteacher = (int) $DB->get_field('role', 'id', ['shortname' => 'editingteacher']);
+        $now = time();
+        $applyid = (int) $DB->insert_record('enrol', (object) [
+            'enrol' => 'apply',
+            'courseid' => $course->id,
+            'status' => ENROL_INSTANCE_ENABLED,
+            'sortorder' => 99,
+            'timecreated' => $now,
+            'timemodified' => $now,
+        ]);
+        $applyrow = function (int $userid, int $status) use ($DB, $applyid, $now): void {
+            $DB->insert_record('user_enrolments', (object) [
+                'enrolid' => $applyid,
+                'userid' => $userid,
+                'status' => $status,
+                'timestart' => 0,
+                'timeend' => 0,
+                'modifierid' => 0,
+                'timecreated' => $now,
+                'timemodified' => $now,
+            ]);
+        };
+
+        $viewers = [];
+
+        $user = $generator->create_user();
+        role_assign($editingteacher, $user->id, \core\context\coursecat::instance($course->category)->id);
+        $generator->enrol_user($user->id, $course->id, 'student', 'manual', 0, 0, ENROL_USER_SUSPENDED);
+        $viewers['a category teacher with a suspended enrolment'] = [$user, access::RELATIONSHIP_SUSPENDED];
+
+        $user = $generator->create_user();
+        $generator->enrol_user($user->id, $course->id, 'manager', 'manual', 0, 0, ENROL_USER_SUSPENDED);
+        $viewers['a manager with a suspended enrolment'] = [$user, access::RELATIONSHIP_SUSPENDED];
+
+        $user = $generator->create_user();
+        $generator->enrol_user($user->id, $course->id, 'editingteacher', 'manual', 0, 0, ENROL_USER_SUSPENDED);
+        enrol_get_plugin('self')->enrol_user($self, $user->id);
+        $viewers['a teacher with a suspended and an active enrolment'] = [$user, access::RELATIONSHIP_ENROLLED];
+
+        $user = $generator->create_user();
+        role_assign($editingteacher, $user->id, $context->id);
+        $viewers['a teacher by a role in the course with no enrolment'] = [$user, access::RELATIONSHIP_NONE];
+
+        $user = $generator->create_user();
+        $generator->enrol_user($user->id, $course->id, 'editingteacher', 'manual', $now + 3 * DAYSECS, 0);
+        $viewers['a teacher whose enrolment starts later'] = [$user, access::RELATIONSHIP_SCHEDULED];
+
+        // Status 2 is enrol_apply's waiting list, whose constant is not defined on a site without that plugin.
+        $applications = [
+            'pending' => [ENROL_USER_SUSPENDED, access::RELATIONSHIP_PENDING],
+            'waitlisted' => [2, access::RELATIONSHIP_WAITLISTED],
+        ];
+        foreach ($applications as $kind => [$status, $relationship]) {
+            $user = $generator->create_user();
+            role_assign($editingteacher, $user->id, $context->id);
+            $applyrow((int) $user->id, $status);
+            $viewers["a teacher whose application is {$kind}"] = [$user, $relationship];
+        }
+
+        foreach ($viewers as $label => [$viewer, $relationship]) {
+            $this->setUser($viewer);
+            access::reset_caches();
+            $this->assertTrue(
+                has_capability('moodle/course:viewhiddencourses', $context),
+                "Precondition: {$label} holds the capability in the course."
+            );
+            $this->assertSame($relationship, access::get_enrolment_state((int) $course->id)['type'], "Fixture: {$label}.");
+            $this->assert_named(true, $course, ucfirst($label) . ' keeps the course');
+        }
+
+        // The force is on: a suspended editing teacher of the same course is refused in the same run.
+        [$teacher, $ueid] = $this->enrol_teacher($course);
+        $DB->set_field('user_enrolments', 'status', ENROL_USER_SUSPENDED, ['id' => $ueid]);
+        $this->setUser($teacher);
+        $this->assertTrue(has_capability('moodle/course:viewhiddencourses', $context));
+        $this->assert_named(false, $course, 'Control: a suspended editing teacher of the same course is refused');
+    }
+
+    /**
      * Being able to self-enrol does not rescue a course in an unlisted category in listings.
      *
      * @return void

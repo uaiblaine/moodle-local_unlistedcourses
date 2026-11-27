@@ -460,9 +460,21 @@ An unlisted course is discoverable by `$USER` when **any** of these holds (`elig
 
 1. **A relationship with the course** (`has_course_relationship()`):
    - the course is the site course (everybody participates on the front page);
-   - staff: `is_viewing()` (`moodle/course:view`, held by managers) or
-     `moodle/course:viewhiddencourses` (teacher, editing teacher, course creator, manager). Asked
-     first: it reads the access data loaded once per request, so a manager pays no enrolment read;
+   - staff (`is_staff()`, the one definition both the per-course path and `prime_probe()` call):
+     `is_viewing()` (`moodle/course:view`, held by managers), or
+     `moodle/course:viewhiddencourses` (teacher, editing teacher, course creator, manager) unless
+     the viewer's own enrolment in the course is suspended, ended, or on a disabled method
+     (`enrolment_has_lapsed()`: the viewer holds at least one row and the strongest state is
+     `suspended`, `expired` or `none`; a role with no row at all is not lapsed) and the capability
+     does not also reach them from the category context above the course. Core keeps the role an
+     enrolment gave after the enrolment is suspended or ends, so without that exception a teacher
+     the course has let go would keep it while a student in the same state loses it; such a
+     teacher is then judged like anybody else in that state. Asked first, and the capability terms
+     first within it (`staff_without_enrolment()`): they read the access data loaded once per
+     request, so a manager or a teacher of the category pays no enrolment read. Only a viewer
+     holding the capability through a role in the course alone needs their enrolment state, the
+     same memoised read the allow-list below makes, and in a listing the probe's one bulk read of
+     the viewer's rows;
    - a relationship from the **allow-list** `enrolled`, `scheduled`, `pending`, `waitlisted`
      (section 2.5). `suspended` and `expired` keep nothing by themselves; a relationship type added
      later stays out until it is put on the list on purpose;
@@ -484,11 +496,14 @@ The stored states cost one statement per request. Eligibility is the expensive h
 rows, `enrol_get_instances()` and the per-instance checks, none cached by core - and runs only for
 unlisted courses and, in `filter_courses()`, for courses an unlisted category withholds. Before the
 rule runs, `prime_probe()` reads what it would read course by course, for all of them at once, in at
-most four statements: the course contexts with every enabled instance (the rows of
-`enrol_get_instances($courseid, true)`, in its order and with its filter), every row the viewer
-holds, the viewer's cohorts (only when a self enrolment instance restricts by one) and one grouped
-count of the rows on every capped self enrolment instance. Staff skip the last three, and a course
-the enrolment state keeps skips the last two. The rule then decides every course from those memos,
+most four statements: the course contexts and the category context above each, with every enabled
+instance (the rows of `enrol_get_instances($courseid, true)`, in its order and with its filter),
+every row the viewer holds, the viewer's cohorts (only when a self enrolment instance restricts by
+one) and one grouped count of the rows on every capped self enrolment
+instance. Staff by `moodle/course:view` or by the capability held above the course skip the last
+three; a viewer holding it through a role in the course alone reads their rows (their enrolment
+state decides whether they are staff) and, unless that enrolment has lapsed, skips the last two; and
+a course the enrolment state keeps skips the last two. The rule then decides every course from those memos,
 in the same order and by the same terms; enrol_self's `can_self_enrol($instance, false)` is answered
 by `self_enrol_admits()`, a check-for-check copy of it and `is_self_enrol_available()` over the same
 facts, held to the core methods by a parity test over every check and a fingerprint of their source
@@ -701,7 +716,7 @@ Two rules follow:
 | `discoverability::would_be_public()` | none | - | as `are_public()`, never memoised |
 | `category_discoverability::relist_activations()` / `may_relist()` | none / the given user | - | constant: the state, the path, one statement per kind of row, both compositions; `may_relist()` reads no context more when handed the activations |
 | `access::filter_courses_public()` | none | course | as `are_public()` |
-| `access::are_courses_discoverable()` / `is_course_discoverable()` | `$USER` | viewer:course | 1 for states + at most 4 for the probe of the unlisted ones (1 for staff, 0 for a visitor); plus what enrol methods other than self, guest and manual ask per instance |
+| `access::are_courses_discoverable()` / `is_course_discoverable()` | `$USER` | viewer:course | 1 for states + at most 4 for the probe of the unlisted ones (1 for a manager or a teacher of the category, 2 for a teacher by a role in the course, 0 for a visitor); plus what enrol methods other than self, guest and manual ask per instance |
 | `access::filter_courses()` | `$USER` | viewer:course | the above, with the courses under an unlisted category in the same probe, + the category predicate |
 | `category_access::are_categories_discoverable()` / `filter_categories()` | `$USER` | viewer:category | at most 4 per request; 1 when nothing is unlisted |
 | `access::get_enrolment_state()` | `$USER` | viewer:course | 1 per course |

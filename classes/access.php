@@ -152,6 +152,22 @@ class access {
         self::RELATIONSHIP_WAITLISTED,
     ];
 
+    /**
+     * The strongest relationships that mean the viewer's own enrolment has lapsed, when they hold a row at all.
+     *
+     * None counts only beside a row: a row on a disabled method, or one that ends before it starts,
+     * which core's is_enrolled($context, $user, '', true) refuses too. A viewer with no row is not
+     * lapsed. {@see enrolment_has_lapsed()} applies both halves.
+     */
+    private const LAPSED_RELATIONSHIPS = [
+        self::RELATIONSHIP_SUSPENDED,
+        self::RELATIONSHIP_EXPIRED,
+        self::RELATIONSHIP_NONE,
+    ];
+
+    /** The capability core asks to decide who still sees a hidden course; {@see is_staff()} reads it as staff. */
+    private const STAFF_CAPABILITY = 'moodle/course:viewhiddencourses';
+
     /** The next actions that let the viewer into the course, and so keep an unlisted course discoverable. */
     private const ENROLABLE_ACTIONS = [self::NEXT_OPEN, self::NEXT_GUEST, self::NEXT_CONDITIONAL];
 
@@ -179,6 +195,12 @@ class access {
 
     /** @var array Request cache of the enrolment relationship, keyed "userid:courseid" => classification. */
     private static array $enrolmentstate = [];
+
+    /**
+     * @var array Request cache of whether the viewer holds any user_enrolments row in the course, keyed
+     *      "userid:courseid" => bool; written with $enrolmentstate, from the same rows, and never without it.
+     */
+    private static array $holdsrow = [];
 
     /** @var array Request cache of the discoverability answer, keyed "userid:courseid" => bool. */
     private static array $discoverable = [];
@@ -213,6 +235,7 @@ class access {
         self::$discoverable = [];
         self::$related = [];
         self::$enrolmentstate = [];
+        self::$holdsrow = [];
         self::$nextaction = [];
         self::$probed = [];
         self::$instances = [];
@@ -471,16 +494,23 @@ class access {
      * course, in the same order and by the same rules; this only fills the memos it reads, so
      * a listing costs a fixed number of statements instead of about four per probed course:
      *
-     * 1. the course contexts, with every enabled instance of those courses: the rows of
-     *    enrol_get_instances($courseid, true), in its order and with its filter;
+     * 1. the course contexts and the category context above each, with every enabled instance of
+     *    those courses: the rows of enrol_get_instances($courseid, true), in its order and with its
+     *    filter;
      * 2. every row the viewer holds, driven by their user id alone: the answer of
      *    {@see get_enrolment_state()} for each course, and the own-row test of enrol_self;
      * 3. the viewer's cohorts, only when a self enrolment instance restricts by one;
      * 4. one grouped count of the rows on every capped self enrolment instance.
      *
-     * Statements 2 to 4 are skipped for a course whose viewer is staff of it, the term
-     * {@see compute_course_relationship()} asks first, and 3 and 4 for a course its enrolment
-     * state already keeps. Nothing is primed with a value the per-course call could not have
+     * Staff is decided by {@see is_staff()}, the term {@see compute_course_relationship()} asks
+     * first. Statements 2 to 4 are skipped for a course whose viewer is staff by moodle/course:view
+     * or by the capability held above the course, which no enrolment row changes; a viewer who
+     * holds it through a role in the course alone needs their own state, so their courses join
+     * statement 2, which reads it for every course at once, and skip 3 and 4 once it shows their
+     * enrolment has not lapsed. So a manager or a teacher of the category costs one statement, a
+     * teacher by a role in the course two, and a teacher whose enrolment there has lapsed what
+     * anybody else costs. 3 and 4 are skipped for a course its enrolment state already keeps too.
+     * Nothing is primed with a value the per-course call could not have
      * produced: each memo holds what the statement it replaces reads, from the same rows. A course
      * that is not primed is computed as before, so priming is an optimisation, never a term.
      *
@@ -514,17 +544,31 @@ class access {
         }
 
         /* 1. The contexts and the enabled instances, one row per instance or per course without one.
-           Keyed by an instance or a context, each of one course, so chunks merge into the same rows. */
+           Keyed by an instance or a context, each of one course, so chunks merge into the same rows.
+           Each row also carries the category context above its course, under aliases of its own,
+           which the staff term asks the capability at (staff_without_enrolment()). */
         $ctxfields = \core\context_helper::get_preload_record_columns_sql('ctx');
-        $records = id_chunks::read($asked, function (array $chunk) use ($DB, $ctxfields): array {
+        $parentcolumns = \core\context_helper::get_preload_record_columns('pctx');
+        $parentfields = implode(', ', array_map(
+            fn(string $column, string $alias): string => "{$column} AS parent{$alias}",
+            array_keys($parentcolumns),
+            $parentcolumns
+        ));
+        $records = id_chunks::read($asked, function (array $chunk) use ($DB, $ctxfields, $parentfields): array {
             [$insql, $params] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED, 'crs');
             return $DB->get_records_sql(
-                "SELECT COALESCE(e.id, -ctx.id) AS probekey, e.*, {$ctxfields}
+                "SELECT COALESCE(e.id, -ctx.id) AS probekey, e.*, {$ctxfields}, {$parentfields}
                    FROM {context} ctx
+              LEFT JOIN {course} c ON c.id = ctx.instanceid
+              LEFT JOIN {context} pctx ON pctx.contextlevel = :categorylevel AND pctx.instanceid = c.category
               LEFT JOIN {enrol} e ON e.courseid = ctx.instanceid AND e.status = :enabled
                   WHERE ctx.contextlevel = :courselevel AND ctx.instanceid {$insql}
                ORDER BY ctx.instanceid, e.sortorder, e.id",
-                $params + ['enabled' => ENROL_INSTANCE_ENABLED, 'courselevel' => CONTEXT_COURSE]
+                $params + [
+                    'enabled' => ENROL_INSTANCE_ENABLED,
+                    'courselevel' => CONTEXT_COURSE,
+                    'categorylevel' => CONTEXT_COURSECAT,
+                ]
             );
         });
         /* The filter of enrol_get_instances($courseid, true): an enabled plugin whose code is present.
@@ -534,6 +578,13 @@ class access {
         foreach ($records as $record) {
             $courseid = (int) $record->ctxinstance;
             \core\context_helper::preload_from_record($record);
+            // The site course has no category row above it: all nulls, which the preload ignores.
+            $parent = new \stdClass();
+            foreach ($parentcolumns as $alias) {
+                $parent->{$alias} = $record->{'parent' . $alias};
+                unset($record->{'parent' . $alias});
+            }
+            \core\context_helper::preload_from_record($parent);
             unset($record->probekey);
             self::$instances[$courseid] = self::$instances[$courseid] ?? [];
             if (!in_array($record->enrol, $enabled) || !file_exists("$CFG->dirroot/enrol/$record->enrol/lib.php")) {
@@ -542,11 +593,15 @@ class access {
             self::$instances[$courseid][$record->id] = $record;
         }
 
+        /* Staff by a term no enrolment row can take away is settled here and reads nothing more; a
+           capability held in the course alone needs the state statement 2 is about to give. */
         $open = [];
+        $contexts = [];
         foreach ($asked as $courseid) {
             $context = self::viewer_context($courseid);
-            if ($context && !self::is_staff($context)) {
+            if ($context && self::staff_without_enrolment($context) !== true) {
                 $open[] = $courseid;
+                $contexts[$courseid] = $context;
             }
         }
         if (!$open) {
@@ -574,9 +629,15 @@ class access {
         foreach ($open as $courseid) {
             $key = self::memo_key($viewer, $courseid);
             if (!isset(self::$enrolmentstate[$key])) {
+                // The two memos travel together: enrolment_has_lapsed() trusts a stored state to come with its row fact.
                 self::$enrolmentstate[$key] = self::strongest_state($bycourse[$courseid] ?? [], $now);
+                self::$holdsrow[$key] = isset($bycourse[$courseid]);
             }
             if (in_array(self::$enrolmentstate[$key]['type'], self::DISCOVERABLE_RELATIONSHIPS, true)) {
+                continue;
+            }
+            // The rule itself, answered from the state just primed: staff ask no enrolment method.
+            if (self::is_staff($contexts[$courseid])) {
                 continue;
             }
             foreach (self::$instances[$courseid] ?? [] as $instance) {
@@ -739,7 +800,10 @@ class access {
             return false;
         }
 
-        // Staff first: the capability terms read the access data loaded once per request, so a manager costs no statement.
+        /* Staff first, from the capability terms alone: a manager costs no statement, and a holder of the
+           capability above the course costs at most the category context's row, which a listing has
+           already read. Only a role in the course itself waits for the enrolment state, which the
+           allow-list below reads anyway (the same memo). */
         if (self::is_staff($context)) {
             return true;
         }
@@ -766,14 +830,75 @@ class access {
      *
      * The two capabilities are core's own idioms for "may see this course without being
      * enrolled": moodle/course:view is what is_viewing() tests and what managers hold, and
-     * moodle/course:viewhiddencourses is the one core consults to decide who still sees a hidden
-     * course - held by teacher, editingteacher, coursecreator and manager. Site admins pass both.
+     * {@see STAFF_CAPABILITY} is the one core consults to decide who still sees a hidden course -
+     * held by teacher, editingteacher, coursecreator and manager. Site admins pass both.
+     *
+     * The second one does not make staff of a viewer whose own enrolment in the course has lapsed
+     * - suspended, ended, or on a disabled method ({@see enrolment_has_lapsed()}) - unless it
+     * reaches them from above the course: core keeps the role an enrolment gave after the
+     * enrolment lapses, so the capability alone would keep naming the course to a teacher the
+     * course has let go, while a student in the same state loses it. Such a viewer is judged like
+     * anybody else with that enrolment state. A role in the course with no enrolment row at all
+     * still makes staff.
+     *
+     * The one definition, asked by {@see compute_course_relationship()} and {@see prime_probe()}
+     * alike. The enrolment state is read only when the capability terms leave the answer open; a
+     * listing primes it in bulk.
      *
      * @param \core\context\course $context The course context.
      * @return bool True for staff of the course.
      */
     private static function is_staff(\core\context\course $context): bool {
-        return is_viewing($context) || has_capability('moodle/course:viewhiddencourses', $context);
+        $answer = self::staff_without_enrolment($context);
+        if ($answer !== null) {
+            return $answer;
+        }
+        return !self::enrolment_has_lapsed((int) $context->instanceid);
+    }
+
+    /**
+     * Whether the current user's own enrolment in the course has lapsed: rows, and none of them counts.
+     *
+     * Suspended, ended, or only on a disabled method (or ending before it starts), which
+     * {@see classify_enrolment()} reads as none; a viewer with no row at all has not lapsed. Reads
+     * the state through {@see get_enrolment_state()} first, which loads the row fact with it or
+     * finds both primed by {@see prime_probe()}: no statement of its own.
+     *
+     * @param int $courseid The course id.
+     * @return bool True when the viewer holds a row in the course and none of them ties them to it.
+     */
+    private static function enrolment_has_lapsed(int $courseid): bool {
+        global $USER;
+
+        $state = self::get_enrolment_state($courseid)['type'];
+        $holdsrow = self::$holdsrow[self::memo_key((int) $USER->id, $courseid)] ?? false;
+        return $holdsrow && in_array($state, self::LAPSED_RELATIONSHIPS, true);
+    }
+
+    /**
+     * The staff answer as far as the capabilities give it, before any enrolment row is read.
+     *
+     * True for moodle/course:view in the course and for {@see STAFF_CAPABILITY} held at the
+     * category above it (or higher): nothing about the viewer's enrolment in the course takes
+     * either away. False without the capability in the course. Null when the capability comes
+     * from the course alone, where a lapsed enrolment of the viewer's ends it. The category
+     * context is read by statement 1 of {@see prime_probe()}, so a listing pays nothing here.
+     *
+     * @param \core\context\course $context The course context.
+     * @return bool|null True or false when the enrolment state cannot change the answer, null when it decides.
+     */
+    private static function staff_without_enrolment(\core\context\course $context): ?bool {
+        if (is_viewing($context)) {
+            return true;
+        }
+        if (!has_capability(self::STAFF_CAPABILITY, $context)) {
+            return false;
+        }
+        $parent = $context->get_parent_context();
+        if ($parent && has_capability(self::STAFF_CAPABILITY, $parent)) {
+            return true;
+        }
+        return null;
     }
 
     /**
@@ -912,7 +1037,9 @@ class access {
             ['userid' => $USER->id, 'courseid' => $courseid]
         );
 
+        // The two memos travel together: enrolment_has_lapsed() trusts a stored state to come with its row fact.
         self::$enrolmentstate[$key] = self::strongest_state($rows, time());
+        self::$holdsrow[$key] = (bool) $rows;
         return self::$enrolmentstate[$key];
     }
 

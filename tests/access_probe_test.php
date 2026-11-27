@@ -415,6 +415,240 @@ final class access_probe_test extends \advanced_testcase {
     }
 
     /**
+     * A teacher by a role in the course pays for their rows once; one whose enrolments lapsed pays and loses what a student does.
+     *
+     * The capability held in the course is staff only while the viewer's own enrolment there has
+     * not lapsed, and the probe decides that from the state its one read of the viewer's rows gives,
+     * so the teacher costs the contexts and the rows, however many courses, and none of the cohort
+     * or count statements the shapes would cost a student. The lapsed teacher holds the same
+     * capability through the role their suspended enrolments left behind (asserted first), keeps
+     * nothing - neither shape admits them - and pays exactly what the student pays.
+     *
+     * @return void
+     */
+    public function test_a_teacher_by_a_course_role_pays_for_their_rows_once_and_a_lapsed_one_like_a_student(): void {
+        $generator = $this->getDataGenerator();
+        $category = (int) $generator->create_category()->id;
+        [$warm] = $this->listing(['member', 'full'], 1, discoverability::STATE_UNLISTED, $category);
+        [$small] = $this->listing(['member', 'full'], 1, discoverability::STATE_UNLISTED, $category);
+        [$large] = $this->listing(['member', 'full'], 25, discoverability::STATE_UNLISTED, $category);
+        [$listed] = $this->listing(['none', 'open'], 1, discoverability::STATE_DEFAULT, $category);
+        $teacher = $generator->create_user();
+        $lapsed = $generator->create_user();
+        foreach (array_keys($warm + $small + $large) as $courseid) {
+            $generator->role_assign('editingteacher', (int) $teacher->id, \core\context\course::instance($courseid)->id);
+            $generator->enrol_user($lapsed->id, $courseid, 'editingteacher', 'manual', 0, 0, ENROL_USER_SUSPENDED);
+        }
+
+        $this->filter_as($teacher, $warm);
+        [, $smallreads] = $this->filter_as($teacher, $small);
+        [$kept, $largereads] = $this->filter_as($teacher, $large);
+        [, $listedreads] = $this->filter_as($teacher, $listed);
+
+        $this->assertCount(50, $kept, 'The teacher keeps every course they hold the role in.');
+        $this->assertSame($smallreads, $largereads, 'The teacher\'s probe costs the same for 50 courses as for 2.');
+        $this->assertSame($listedreads + 2, $largereads, 'Two statements: the contexts, then the rows that say nothing lapsed.');
+
+        $this->filter_as($lapsed, $warm);
+        $firstcontext = \core\context\course::instance(array_key_first($large));
+        $this->assertTrue(has_capability('moodle/course:viewhiddencourses', $firstcontext), 'Precondition: the role stays.');
+        [$lapsedkept, $lapsedreads] = $this->filter_as($lapsed, $large);
+        [, $lapsedlistedreads] = $this->filter_as($lapsed, $listed);
+        $this->filter_as($this->student, $warm);
+        [, $studentreads] = $this->filter_as($this->student, $large);
+        [, $studentlistedreads] = $this->filter_as($this->student, $listed);
+
+        $this->assertSame([], $lapsedkept, 'A teacher whose enrolments are all suspended keeps nothing neither shape admits.');
+        $this->assertSame($lapsedlistedreads + 4, $lapsedreads, 'The lapsed teacher pays the rows, the cohorts and the counts.');
+        $this->assertSame($studentlistedreads + 4, $studentreads, 'Control: so does the student.');
+    }
+
+    /**
+     * A teacher whose capability comes from a category role keeps every course for one statement, whatever their rows say.
+     *
+     * Their enrolment in every course is suspended, and still no row is read: the capability above
+     * the course is asked before the enrolment state, at the category context statement 1 already
+     * read with the course contexts.
+     *
+     * @return void
+     */
+    public function test_a_teacher_above_the_course_keeps_every_course_for_one_statement(): void {
+        $generator = $this->getDataGenerator();
+        $category = (int) $generator->create_category()->id;
+        [$warm] = $this->listing(['member', 'full'], 1, discoverability::STATE_UNLISTED, $category);
+        [$small] = $this->listing(['member', 'full'], 1, discoverability::STATE_UNLISTED, $category);
+        [$large] = $this->listing(['member', 'full'], 25, discoverability::STATE_UNLISTED, $category);
+        [$listed] = $this->listing(['none', 'open'], 1, discoverability::STATE_DEFAULT, $category);
+        $teacher = $generator->create_user();
+        $generator->role_assign('editingteacher', (int) $teacher->id, \core\context\coursecat::instance($category)->id);
+        foreach (array_keys($warm + $small + $large) as $courseid) {
+            $generator->enrol_user($teacher->id, $courseid, 'student', 'manual', 0, 0, ENROL_USER_SUSPENDED);
+        }
+
+        $this->filter_as($teacher, $warm);
+        [, $smallreads] = $this->filter_as($teacher, $small);
+        [$kept, $largereads] = $this->filter_as($teacher, $large);
+        [, $listedreads] = $this->filter_as($teacher, $listed);
+
+        $this->assertCount(50, $kept, 'A teacher of the category keeps every course, suspended enrolments and all.');
+        $this->assertSame($smallreads, $largereads, 'The probe costs the same for 50 courses as for 2.');
+        $this->assertSame($listedreads + 1, $largereads, 'One statement: the contexts, the category\'s among them; no row.');
+    }
+
+    /**
+     * The staff answer is the same course by course, unprimed, and in bulk, for every kind of viewer.
+     *
+     * One definition decides staff ({@see access::is_staff()}), and the probe primes the state it
+     * reads: this holds the per-course path (eligible(), unprimed) to the listing filter and the
+     * batch for viewers on both sides of the rule, and checks that, once primed, the staff answer of
+     * every course costs no statement. Each course offers nobody a way in, so the answer is the
+     * relationship alone. The two kinds of none are both here: a role with no row (staff) and a
+     * teacher whose only row is on a disabled method (lapsed).
+     *
+     * @return void
+     */
+    public function test_the_staff_answer_is_the_same_per_course_and_in_bulk(): void {
+        global $DB;
+
+        $generator = $this->getDataGenerator();
+        $category = (int) $generator->create_category()->id;
+        [$items] = $this->listing(['outsider', 'outsider'], 1, discoverability::STATE_UNLISTED, $category);
+        [$own, $other] = array_keys($items);
+        $owncontext = \core\context\course::instance($own);
+        $selfid = (int) $DB->get_field('enrol', 'id', ['courseid' => $own, 'enrol' => 'self', 'customint5' => $this->cohortout]);
+        $self = $DB->get_record('enrol', ['id' => $selfid], '*', MUST_EXIST);
+        $past = time() - DAYSECS;
+
+        $viewers = [];
+        $user = $generator->create_user();
+        $generator->enrol_user($user->id, $own, 'editingteacher', 'manual', 0, 0, ENROL_USER_SUSPENDED);
+        $viewers['suspended teacher'] = [$user, [$own => false, $other => false]];
+        $user = $generator->create_user();
+        $generator->enrol_user($user->id, $own, 'editingteacher', 'manual', $past - DAYSECS, $past);
+        $viewers['ended teacher'] = [$user, [$own => false, $other => false]];
+        $user = $generator->create_user();
+        $generator->role_assign('editingteacher', (int) $user->id, $owncontext->id);
+        $viewers['teacher by role alone'] = [$user, [$own => true, $other => false]];
+        $user = $generator->create_user();
+        $generator->enrol_user($user->id, $own, 'editingteacher');
+        $viewers['active teacher'] = [$user, [$own => true, $other => false]];
+        $user = $generator->create_user();
+        $generator->role_assign('editingteacher', (int) $user->id, \core\context\coursecat::instance($category)->id);
+        $generator->enrol_user($user->id, $own, 'student', 'manual', 0, 0, ENROL_USER_SUSPENDED);
+        $viewers['category teacher, suspended'] = [$user, [$own => true, $other => true]];
+        $user = $generator->create_user();
+        $generator->enrol_user($user->id, $own, 'manager', 'manual', 0, 0, ENROL_USER_SUSPENDED);
+        $viewers['manager, suspended'] = [$user, [$own => true, $other => false]];
+        $user = $generator->create_user();
+        $generator->enrol_user($user->id, $own, 'editingteacher', 'manual', 0, 0, ENROL_USER_SUSPENDED);
+        enrol_get_plugin('self')->enrol_user($self, $user->id);
+        $viewers['suspended and active'] = [$user, [$own => true, $other => false]];
+        // A method of its own, so disabling it changes no other viewer's rows.
+        $disabled = $this->add_self(get_course($own), ['status' => ENROL_INSTANCE_DISABLED]);
+        $user = $generator->create_user();
+        $editingteacher = (int) $DB->get_field('role', 'id', ['shortname' => 'editingteacher']);
+        enrol_get_plugin('self')->enrol_user($disabled, $user->id, $editingteacher);
+        $viewers['teacher on a disabled method'] = [$user, [$own => false, $other => false]];
+
+        $eligible = new \ReflectionMethod(access::class, 'eligible');
+        $isstaff = new \ReflectionMethod(access::class, 'is_staff');
+        $prime = new \ReflectionMethod(access::class, 'prime_probe');
+        foreach ($viewers as $label => [$viewer, $expected]) {
+            $this->become($viewer);
+            $this->assertTrue(has_capability('moodle/course:viewhiddencourses', $owncontext), "Precondition: the {$label}.");
+            $percourse = [];
+            $staff = [];
+            foreach ([$own, $other] as $courseid) {
+                $percourse[$courseid] = $eligible->invoke(null, $courseid);
+                $staff[$courseid] = $isstaff->invoke(null, \core\context\course::instance($courseid));
+            }
+            $this->assertSame($expected, $percourse, "The per-course answer for the {$label}.");
+
+            [$kept] = $this->filter_as($viewer, $items);
+            $this->assertSame(array_keys(array_filter($expected)), array_keys($kept), "The listing agrees for the {$label}.");
+            $this->become($viewer);
+            $this->assertSame($expected, access::are_courses_discoverable([$own, $other]), "The batch agrees for the {$label}.");
+
+            $this->become($viewer);
+            $prime->invoke(null, [$own, $other]);
+            $primed = [];
+            $reads = $this->reads(function () use ($isstaff, $own, $other, &$primed): void {
+                foreach ([$own, $other] as $courseid) {
+                    $primed[$courseid] = $isstaff->invoke(null, \core\context\course::instance($courseid));
+                }
+            });
+            $this->assertSame($staff, $primed, "The primed staff answer is the per-course one for the {$label}.");
+            $this->assertSame(0, $reads, "Once primed, the staff answer of the {$label} costs no statement.");
+        }
+    }
+
+    /**
+     * The staff answer does not depend on which path filled the memos first, nor on being asked twice.
+     *
+     * The memos the per-course path and the bulk path write ($enrolmentstate and $holdsrow) are
+     * shared inside a request, so each viewer is put through three orders with no reset between
+     * the steps: per course then bulk, bulk then per course, and the same course twice.
+     *
+     * @return void
+     */
+    public function test_the_staff_answer_does_not_depend_on_the_order_the_memos_were_filled(): void {
+        global $DB;
+
+        $generator = $this->getDataGenerator();
+        $category = (int) $generator->create_category()->id;
+        [$items] = $this->listing(['outsider', 'outsider'], 1, discoverability::STATE_UNLISTED, $category);
+        [$own, $other] = array_keys($items);
+        $owncontext = \core\context\course::instance($own);
+        $courseids = [$own, $other];
+
+        $viewers = [];
+        $user = $generator->create_user();
+        $generator->enrol_user($user->id, $own, 'editingteacher', 'manual', 0, 0, ENROL_USER_SUSPENDED);
+        $viewers['lapsed teacher'] = [$user, [$own => false, $other => false]];
+        $disabled = $this->add_self(get_course($own), ['status' => ENROL_INSTANCE_DISABLED]);
+        $user = $generator->create_user();
+        $editingteacher = (int) $DB->get_field('role', 'id', ['shortname' => 'editingteacher']);
+        enrol_get_plugin('self')->enrol_user($disabled, $user->id, $editingteacher);
+        $viewers['teacher on a disabled method'] = [$user, [$own => false, $other => false]];
+        $user = $generator->create_user();
+        $generator->role_assign('editingteacher', (int) $user->id, $owncontext->id);
+        $viewers['teacher by role alone'] = [$user, [$own => true, $other => false]];
+        $user = $generator->create_user();
+        $generator->enrol_user($user->id, $own, 'editingteacher');
+        $viewers['active teacher'] = [$user, [$own => true, $other => false]];
+
+        $percourse = function () use ($courseids): array {
+            $answers = [];
+            foreach ($courseids as $courseid) {
+                $answers[$courseid] = access::is_course_discoverable($courseid);
+            }
+            return $answers;
+        };
+        $bulk = function () use ($items, $courseids): array {
+            $kept = array_keys(access::filter_courses($items));
+            $batch = access::are_courses_discoverable($courseids);
+            $this->assertSame($kept, array_keys(array_filter($batch)), 'The listing and the batch agree.');
+            return $batch;
+        };
+
+        foreach ($viewers as $label => [$viewer, $expected]) {
+            $this->become($viewer);
+            $this->assertTrue(has_capability('moodle/course:viewhiddencourses', $owncontext), "Precondition: the {$label}.");
+            $this->assertSame($expected, $percourse(), "Per course first, the {$label}.");
+            $this->assertSame($expected, $bulk(), "The bulk answer after the per-course one, the {$label}.");
+            $this->assertSame($expected, $percourse(), "Per course again after the bulk one, the {$label}.");
+
+            $this->become($viewer);
+            $this->assertSame($expected, $bulk(), "Bulk first, the {$label}.");
+            $this->assertSame($expected, $percourse(), "The per-course answer after the bulk one, the {$label}.");
+
+            $this->become($viewer);
+            $this->assertSame($expected[$own], access::is_course_discoverable($own), "Asked once, the {$label}.");
+            $this->assertSame($expected[$own], access::is_course_discoverable($own), "The same course twice, the {$label}.");
+        }
+    }
+
+    /**
      * A visitor and the guest account keep no unlisted course, open ones included, and the probe reads nothing for them.
      *
      * @return void

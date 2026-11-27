@@ -133,11 +133,22 @@ Somebody may discover an unlisted course when any of these holds:
 - they will be enrolled by `enrol_coursecompleted` once they complete another course (their next
   action is conditional): an instance inside its enrolment window on which they hold no row, for a
   viewer actively enrolled in the prerequisite course the instance names;
-- they are staff - `moodle/course:view` or `moodle/course:viewhiddencourses` on the course.
+- they are staff - `moodle/course:view` or `moodle/course:viewhiddencourses` on the course, except
+  through a role their own suspended, ended or disabled-method enrolment left behind (below).
 
 The relationships in that list are an explicit allow-list - enrolled, scheduled, pending,
 waitlisted. A suspended or expired enrolment keeps nothing by itself, though the course stays
 discoverable to that user through any route the next action still offers them.
+
+Staff is a relationship by role, and Moodle keeps the role an enrolment gave after that
+enrolment is suspended or ends. So a teacher whose own enrolment in the course is suspended, has
+ended, or is on an enrolment method that is disabled, and who holds
+`moodle/course:viewhiddencourses` only through a role in the course itself, is not staff of it:
+they are judged like a student in the same state. A role in the course with no
+enrolment at all, the capability held at a category or the whole site, `moodle/course:view` (a
+manager), or another enrolment of theirs in the course that is active, starts later or awaits a
+decision keeps them staff. Reactivating the enrolment (or enabling its method again), or a role
+above the course, restores the course to them.
 
 There is no cohort setting of this plugin's own: restricting who may join an unlisted course
 is the enrolment method's job, through `enrol.customint5`, the "only cohort members" field
