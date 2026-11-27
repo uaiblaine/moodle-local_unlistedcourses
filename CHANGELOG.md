@@ -6,10 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Version `2026100514`: a teacher whose own enrolment has lapsed is no longer staff of the course. No
+database changes.
+
 Version `2026100513`: the fixes of the 2026-11-25 external audit, with a new event (the bump makes
 core register it). No database changes.
 
 ### Security
+
+- A teacher whose own enrolment in a course is suspended, has ended, or is on a disabled enrolment
+  method, and who holds no role above the course, is no longer named the course when it is unlisted, nor a course of an unlisted
+  category, in listings. Moodle keeps the role an enrolment gave after the enrolment is suspended
+  or ends, and "staff of the course" (`moodle/course:viewhiddencourses`) read that role, so such a
+  teacher kept the course while a student in the same state lost it. They are now judged like that
+  student: an enrolment method that would still take them, or another enrolment of theirs that is
+  active, starts later or awaits a decision, still names it to them. A role in the course with no
+  enrolment at all, the capability held at a category or the whole site, and `moodle/course:view`
+  (managers) keep counting as staff whatever the person's enrolments say.
+  **Behaviour change to announce:** a teacher whose own enrolment is suspended, has ended, or is on
+  a disabled enrolment method, and who holds no role above the course, stops seeing the unlisted
+  course in listings; reactivating the enrolment (or its method) or a category or system role
+  restores it. A listing now reads the enrolments of a
+  teacher by a role in the course in its one bulk read (one statement more for such a teacher, none
+  per course); a manager or a teacher of the category still costs none.
 
 - Taking a category out of the unlisted state (listing it again, or making it public) needs the
   right to publish what that makes public. A course or subcategory whose own state is public stays
