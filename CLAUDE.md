@@ -109,16 +109,28 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   `has_course_relationship()` answers from memory, skipping even the probe's bulk reads. The
   caller is vouching for a relationship it read; it is NOT authoritative about the absence of
   one, because being staff of a course is a relationship too and no enrolment table carries
-  it. Viewer-keyed, dropped by `reset_caches()`. It ignores a visitor and the guest account
+  it (though a lapsed enrolment can take it away, next bullet). Viewer-keyed, dropped by `reset_caches()`. It ignores a visitor and the guest account
   itself, because `has_course_relationship()` reads the memo before `viewer_context()`.
 - **The listing probe is primed in bulk and decided per course.** `access::prime_probe()` reads,
   for every unlisted or category-withheld course of a listing at once, what the per-course rule
-  would read: contexts with the enabled instances, the viewer's rows, their cohorts, the counts
-  on capped self instances (at most four statements; one for staff, none for a visitor). It only
-  fills memos with what the replaced statement reads from the same rows; the verdict stays in
-  `compute_course_relationship()` and `eligible()`. Staff is asked first (no statement), then the
+  would read: contexts (with the category context above each) and the enabled instances, the
+  viewer's rows, their cohorts, the counts on capped self instances (at most four statements; one
+  for a manager or a teacher of the category, two for a teacher by a role in the course, none for a
+  visitor). It only fills memos with what the replaced statement reads from the same rows; the
+  verdict stays in `compute_course_relationship()` and `eligible()`. Staff is asked first, then the
   enrolment state, then `is_enrolled()` only when core's `$USER->enrol['enrolled']` memo holds the
   course: every row `is_enrolled()` counts is one `classify_enrolment()` calls enrolled.
+- **Staff is one function, `is_staff()`, and a lapsed enrolment ends it** (owner, 2026-11-26).
+  `moodle/course:view` (`is_viewing()`) is staff whatever the rows say; `moodle/course:viewhiddencourses`
+  is staff unless the viewer's own enrolment in the course is suspended, ended, or on a disabled
+  method (`enrolment_has_lapsed()`: they hold a row and the strongest state is suspended, expired or
+  none; no row at all is not lapsed) and the capability does not also hold at the category context
+  above, because core keeps the role a lapsed enrolment gave. The row fact is its own memo,
+  `$holdsrow`, written with `$enrolmentstate` at both places a state is memoised. `staff_without_enrolment()` answers the capability terms with no row read (null when only
+  the state can decide); `prime_probe()` calls it to keep such courses in statement 2 and then asks
+  `is_staff()` itself from the state that statement primed, so the two paths share the rule and the
+  memo. `access_probe_test::test_the_staff_answer_is_the_same_per_course_and_in_bulk` holds them
+  together.
 - **`self_enrol_admits()` copies enrol_self's `can_self_enrol($instance, false)`** and its
   `is_self_enrol_available()`, check for check, over the primed facts. It is the one place the
   discoverability rule does not ask the plugin itself. `access_probe_test` holds it to core by a
@@ -264,7 +276,8 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
   its rotation.
 - The `access` predicate gotchas that predate the state table — `can_self_enrol()` is not
   generic, `=== true` never `!== false`, the applicant cap lives outside `allow_apply()`, a
-  pending application is not an enrolment, staff must never lose a course,
+  pending application is not an enrolment, staff must never lose a course (staff whose own
+  enrolment lapsed are not staff: see `is_staff()` above),
   `is_enrolled()` is unconditionally true on SITEID — are documented in that class's
   docblocks and held by `tests/access_test.php`.
 - **The relationships that keep an unlisted course are an allow-list**
@@ -311,7 +324,7 @@ before `mdl upgrade` (`php admin/cli/cfg.php --component=local_unlistedcourses -
 - **`enrol_apply` is absent from a fresh test site's `enrol_plugins_enabled`** —
   `add_apply_enrol()` in `access_test` enables it first.
 - **Run the mutation sweep, not just the suite.** `mutations/gates.conf` holds two hundred and
-  two guards, and each must redden a test; the relist check, its prediction, preview, form and
+  fourteen guards, and each must redden a test; the relist check, its prediction, preview, form and
   site-wide lock have their own spec, `mutations/category_relist.conf` (twenty-five), swept with
   `--fast` on both database families. The apply, autoenrol and coursecompleted gates
   need a stack that mounts those plugins: m503 and m503b mount all three. `mdl ci`, and so
